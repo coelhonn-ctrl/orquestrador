@@ -1,0 +1,334 @@
+{
+  "equipes": [
+    {
+      "id": "gestor",
+      "nome": "Gestor",
+      "desc": "Recebe os pedidos, divide entre as equipes e acompanha até a entrega.",
+      "fixa": true,
+      "area": "gestao",
+      "agentes": "planejador",
+      "prefere": [
+        "claude",
+        "antigravity",
+        "gemini",
+        "codex",
+        "ollama"
+      ]
+    },
+    {
+      "id": "avaliador",
+      "nome": "Avaliador",
+      "desc": "Confere a entrega contra o que foi pedido antes de chegar a você.",
+      "fixa": true,
+      "area": "avaliacao",
+      "agentes": "conferente",
+      "prefere": [
+        "ollama",
+        "antigravity",
+        "gemini",
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "id": "treinador",
+      "nome": "Treinador",
+      "desc": "Treina as outras equipes: cria casos de teste, gera cópias com instruções diferentes, dá nota e fica com a melhor.",
+      "fixa": true,
+      "sistema": true,
+      "area": "treinamento",
+      "agentes": "criador-de-casos, juiz, otimizador",
+      "prefere": [
+        "claude",
+        "codex",
+        "antigravity",
+        "gemini",
+        "ollama"
+      ]
+    }
+  ],
+  "ias": [
+    {
+      "id": "claude",
+      "tipo": "claude",
+      "nome": "Claude Code"
+    },
+    {
+      "id": "antigravity",
+      "tipo": "antigravity",
+      "nome": "Antigravity (Google)"
+    },
+    {
+      "id": "gemini",
+      "tipo": "gemini",
+      "nome": "Gemini CLI"
+    },
+    {
+      "id": "codex",
+      "tipo": "codex",
+      "nome": "Codex CLI"
+    },
+    {
+      "id": "ollama",
+      "tipo": "ollama",
+      "nome": "Ollama",
+      "modelo": "qwen2.5-coder:14b"
+    },
+    {
+      "id": "terminal",
+      "tipo": "shell",
+      "nome": "Terminal"
+    },
+    {
+      "id": "simulado",
+      "tipo": "simulado",
+      "nome": "Simulado (demonstração)"
+    }
+  ],
+  "areas": {
+    "seguranca": [
+      "como-testar",
+      "como-implementar",
+      "checklist-owasp"
+    ],
+    "codigo": [
+      "padroes",
+      "testes"
+    ],
+    "debug": [
+      "como-reproduzir"
+    ],
+    "pesquisa": [
+      "fontes-confiaveis"
+    ]
+  },
+  "objetivos": [
+    {
+      "id": "desenvolvimento",
+      "nome": "Desenvolver software",
+      "desc": "Criar e corrigir código, apps, sites e APIs.",
+      "equipes": [
+        {
+          "id": "codigo",
+          "nome": "Código",
+          "desc": "Implementa a solução com testes.",
+          "area": "codigo",
+          "agentes": "implementador, testador",
+          "prefere": [
+            "claude",
+            "codex",
+            "antigravity",
+            "gemini"
+          ],
+          "requer": "editar",
+          "instrucoes": "",
+          "familia": "Desenvolvimento"
+        },
+        {
+          "id": "debug",
+          "nome": "Debug",
+          "desc": "Reproduz o erro, roda os testes e isola a causa antes de corrigir.",
+          "area": "debug",
+          "agentes": "reprodutor, isolador",
+          "prefere": [
+            "claude",
+            "codex",
+            "antigravity",
+            "gemini"
+          ],
+          "requer": "editar",
+          "instrucoes": "",
+          "familia": "Desenvolvimento"
+        },
+        {
+          "id": "limpo",
+          "nome": "Código limpo",
+          "desc": "Padroniza nomes, remove duplicação e organiza camadas.",
+          "area": "codigo-limpo",
+          "agentes": "revisor",
+          "prefere": [
+            "claude",
+            "codex",
+            "antigravity",
+            "gemini"
+          ],
+          "requer": "editar",
+          "instrucoes": "",
+          "familia": "Desenvolvimento"
+        }
+      ]
+    },
+    {
+      "id": "seguranca",
+      "nome": "Segurança de sistemas",
+      "desc": "Revisar vulnerabilidades, dependências, autenticação e segredos.",
+      "equipes": [
+        {
+          "id": "seguranca",
+          "nome": "Segurança",
+          "desc": "OWASP, dependências, autenticação e segredos expostos.",
+          "area": "seguranca",
+          "agentes": "auditor-owasp, revisor-deps, caçador-de-segredos",
+          "prefere": [
+            "claude",
+            "codex",
+            "antigravity",
+            "gemini"
+          ],
+          "requer": "editar",
+          "instrucoes": "",
+          "familia": "Segurança"
+        }
+      ]
+    },
+    {
+      "id": "pesquisa",
+      "nome": "Pesquisa e estudo",
+      "desc": "Levantar informações, comparar opções e resumir o que importa.",
+      "equipes": [
+        {
+          "id": "pesquisa",
+          "nome": "Pesquisa",
+          "desc": "Busca informações em fontes confiáveis, compara abordagens e resume o que encontrou.",
+          "area": "pesquisa",
+          "agentes": "buscador, comparador",
+          "prefere": [
+            "antigravity",
+            "gemini",
+            "claude",
+            "codex"
+          ],
+          "instrucoes": "",
+          "familia": "Pesquisa"
+        }
+      ]
+    },
+    {
+      "id": "escrita",
+      "nome": "Escrita e conteúdo",
+      "desc": "Textos, artigos, e-mails, roteiros, posts e documentação.",
+      "equipes": [
+        {
+          "id": "redacao",
+          "nome": "Redação",
+          "desc": "Escreve textos claros no formato pedido: artigos, e-mails, roteiros, documentação.",
+          "area": "redacao",
+          "agentes": "redator",
+          "prefere": [
+            "claude",
+            "antigravity",
+            "gemini",
+            "codex"
+          ],
+          "instrucoes": "Escreva em português simples, sem enrolação, no formato e no tom que o pedido pede.",
+          "familia": "Escrita"
+        },
+        {
+          "id": "revisao-texto",
+          "nome": "Revisão de texto",
+          "desc": "Revisa ortografia, clareza, tom e consistência antes da entrega.",
+          "area": "revisao-texto",
+          "agentes": "revisor",
+          "prefere": [
+            "claude",
+            "antigravity",
+            "gemini",
+            "codex"
+          ],
+          "instrucoes": "",
+          "familia": "Escrita"
+        }
+      ]
+    },
+    {
+      "id": "dados",
+      "nome": "Dados e planilhas",
+      "desc": "Analisar números, montar planilhas, gráficos e relatórios.",
+      "equipes": [
+        {
+          "id": "dados",
+          "nome": "Dados",
+          "desc": "Organiza e analisa dados, monta planilhas, gráficos e relatórios com os números conferidos.",
+          "area": "dados",
+          "agentes": "analista, conferente",
+          "prefere": [
+            "claude",
+            "antigravity",
+            "gemini",
+            "codex"
+          ],
+          "requer": "editar",
+          "instrucoes": "",
+          "familia": "Dados"
+        }
+      ]
+    },
+    {
+      "id": "marketing",
+      "nome": "Marketing e vendas",
+      "desc": "Campanhas, anúncios, posts e análise de público.",
+      "equipes": [
+        {
+          "id": "marketing",
+          "nome": "Marketing",
+          "desc": "Define público, mensagem e canais; escreve campanhas, anúncios e posts.",
+          "area": "marketing",
+          "agentes": "estrategista, redator-publicitario",
+          "prefere": [
+            "claude",
+            "antigravity",
+            "gemini",
+            "codex"
+          ],
+          "instrucoes": "",
+          "familia": "Marketing"
+        }
+      ]
+    },
+    {
+      "id": "planejamento",
+      "nome": "Planejamento e organização",
+      "desc": "Planos de projeto, cronogramas, processos e checklists.",
+      "equipes": [
+        {
+          "id": "planejamento",
+          "nome": "Planejamento",
+          "desc": "Transforma objetivos em planos, etapas, cronogramas e checklists acionáveis.",
+          "area": "planejamento",
+          "agentes": "planejador",
+          "prefere": [
+            "claude",
+            "antigravity",
+            "gemini",
+            "codex"
+          ],
+          "instrucoes": "",
+          "familia": "Planejamento"
+        }
+      ]
+    },
+    {
+      "id": "infra",
+      "nome": "Automação e servidores",
+      "desc": "Scripts, deploy, servidores e rotinas automáticas.",
+      "equipes": [
+        {
+          "id": "infra",
+          "nome": "Infra e automação",
+          "desc": "Escreve scripts, configura servidores, deploy e rotinas automáticas, sempre com como desfazer.",
+          "area": "infra",
+          "agentes": "operador",
+          "prefere": [
+            "claude",
+            "codex",
+            "antigravity",
+            "gemini"
+          ],
+          "requer": "editar",
+          "instrucoes": "",
+          "familia": "Infraestrutura"
+        }
+      ]
+    }
+  ]
+}

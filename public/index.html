@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#000000">
+<title>Singularize Orquestrador</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=JetBrains+Mono:wght@400&display=swap">
+<link rel="stylesheet" href="/vendor/xterm/css/xterm.css">
+<link rel="stylesheet" href="/app.css">
+<link rel="icon" href="/icone.png">
+</head>
+<body>
+<header class="topo">
+  <a class="marca" href="#/">Singularize <span>Orquestrador</span></a>
+  <nav class="secoes" aria-label="Seções">
+    <a href="#/" data-rota="inicio">Solicitações</a>
+    <a href="#/livre" data-rota="livre">Tela livre</a>
+    <a href="#/cerebro" data-rota="cerebro">Cérebro</a>
+    <a href="#/equipes" data-rota="equipes">Equipes</a>
+    <a href="#/terminais" data-rota="terminais">Acompanhar equipes</a>
+    <a href="#/ias" data-rota="ias">IAs</a>
+    <a href="#/maquinas" data-rota="maquinas">Máquinas</a>
+    <a href="#/ajuda" data-rota="ajuda">Ajuda</a>
+  </nav>
+  <div class="cresce"></div>
+  <div class="cotas" id="r-cotas" aria-live="polite"></div>
+  <button type="button" class="pill cheia" data-acao="resumo-abrir" data-dica="Mostra o que as equipes e os agentes fizeram nas últimas 12 horas.">O que aconteceu</button>
+  <span class="conexao" id="r-conexao"><span class="ponto"></span>conectando</span>
+</header>
+<div id="r-aviso"></div>
+<div id="app"></div>
+<div id="r-resumo"></div>
+<div id="r-toast" role="status" aria-live="polite"></div>
+<script src="/app.js" type="module"></script>
+</body>
+</html>

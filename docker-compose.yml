@@ -1,0 +1,23 @@
+# Postgres e Redis para o Orquestrador. O app em si roda fora do Docker,
+# porque precisa dos terminais e logins das IAs instaladas na sua máquina.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: orq
+      POSTGRES_PASSWORD: orq
+      POSTGRES_DB: orq
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - orq-pg:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6380:6379"
+    restart: unless-stopped
+
+volumes:
+  orq-pg:

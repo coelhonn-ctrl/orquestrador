@@ -1,0 +1,3 @@
+#!/bin/sh
+# Dentro do app de desktop, ORQ_NODE aponta para o executável do app em modo Node.
+ELECTRON_RUN_AS_NODE=1 exec "${ORQ_NODE:-node}" "$(dirname "$0")/orq.mjs" "$@"
