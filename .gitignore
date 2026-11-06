@@ -3,3 +3,4 @@ data/
 vault/
 .headroom/
 .env
+dist/

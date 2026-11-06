@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
-import { detectar, resolverExecutavel, esquecerResolvidos } from './adaptadores.js';
+import { detectar, resolverExecutavel, esquecerResolvidos, definirAoFalharProxy } from './adaptadores.js';
 import { atualizarPath } from './caminhos.js';
 
 // Headroom (headroom-ai) é um proxy local que comprime o contexto antes de chegar ao provedor.
@@ -15,7 +15,15 @@ export const criarHeadroom = ({ store, bus, raiz }) => {
   const venv = path.join(raiz, '.headroom');
   const binVenv = path.join(venv, process.platform === 'win32' ? 'Scripts' : 'bin', 'headroom');
   let proxy = null;
-  let estado = { instalado: false, caminho: null, rodando: false, instalando: false, erro: '' };
+  let estado = { instalado: false, caminho: null, rodando: false, instalando: false, erro: '', porta: null, modo: 'normal' };
+  let ultimas = []; // últimas linhas do proxy (para dizer o motivo quando ele não sobe)
+  let reinicios = []; // instantes dos reinícios automáticos
+  let vigia = null;
+  let semRust = false; // o Windows (Smart App Control/antivírus) bloqueou a parte compilada: roda em modo simples
+
+  // Python no Windows escreve em cp1252 quando a saída não é um terminal, e o banner do Headroom usa caracteres
+  // que o cp1252 não tem: o proxy morria na largada. UTF-8 sempre.
+  const envProxy = () => ({ ...process.env, NO_COLOR: '1', PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', ...(semRust ? { HEADROOM_REQUIRE_RUST_CORE: 'false' } : {}) });
 
   const log = (texto, tipo = 'saida') => bus.terminal('headroom', texto, tipo);
 
@@ -28,10 +36,23 @@ export const criarHeadroom = ({ store, bus, raiz }) => {
     return dados;
   };
 
+  // Alguém responde na porta? (qualquer programa)
   const verificarPorta = async (porta) => {
     try {
       await fetch(`http://127.0.0.1:${porta}/`, { signal: AbortSignal.timeout(1500) });
       return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // É o Headroom mesmo? O proxy responde GET /health com {"status": "healthy", ...}.
+  const ehHeadroom = async (porta) => {
+    try {
+      const r = await fetch(`http://127.0.0.1:${porta}/health`, { signal: AbortSignal.timeout(1500) });
+      if (!r.ok) return false;
+      const j = await r.json().catch(() => null);
+      return !!j && (typeof j.status === 'string' || 'stats' in j || 'optimize' in j);
     } catch {
       return false;
     }
@@ -47,7 +68,7 @@ export const criarHeadroom = ({ store, bus, raiz }) => {
     new Promise((resolve) => {
       log(`$ ${comando} ${args.join(' ')}`, 'cmd');
       const alvo = resolverExecutavel(comando, args);
-      const filho = spawn(alvo.comando, alvo.args, { env: { ...process.env, NO_COLOR: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+      const filho = spawn(alvo.comando, alvo.args, { env: envProxy(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
       const repassar = (tipo) => (d) => d.toString().split('\n').forEach((l) => l.trim() && log(l, tipo));
       filho.stdout.on('data', repassar('saida'));
       filho.stderr.on('data', repassar('saida'));
@@ -113,44 +134,205 @@ export const criarHeadroom = ({ store, bus, raiz }) => {
     }
   };
 
+  // No Windows, o comando headroom é um atalho que abre o Python: matar só o atalho deixava o proxy órfão na porta.
+  const matar = (filho) => {
+    if (!filho) return;
+    if (process.platform === 'win32' && filho.pid) execFile('taskkill', ['/pid', String(filho.pid), '/T', '/F'], { windowsHide: true }, () => {});
+    else filho.kill('SIGTERM');
+  };
+
   const parar = async () => {
+    clearInterval(vigia);
+    vigia = null;
     if (proxy) {
-      proxy.kill('SIGTERM');
+      const p = proxy;
       proxy = null;
+      p.__parado = true;
+      matar(p);
     }
     estado.rodando = false;
   };
 
+  // Por que não subiu, em português, a partir do que o proxy escreveu.
+  const motivo = () => {
+    const t = ultimas.join('\n');
+    if (/WinError 10013|EACCES|forbidden by its access permissions|permiss[aã]o/i.test(t)) return 'porta-bloqueada';
+    if (/WinError 10048|address already in use|already in use|Errno 98/i.test(t)) return 'porta-ocupada';
+    if (/DLL load failed|_core|application control policy|Smart App Control/i.test(t)) return 'dll-bloqueada';
+    if (/UnicodeEncodeError|charmap/i.test(t)) return 'codificacao';
+    if (/No module named|ModuleNotFoundError|ImportError|missing .*extra|pip install/i.test(t)) return 'dependencia';
+    return '';
+  };
+  const EXPLICA = {
+    'porta-bloqueada': 'o Windows reservou a porta (acontece com Docker, WSL ou Hyper-V)',
+    'porta-ocupada': 'outro programa está usando a porta',
+    'dll-bloqueada': 'o Windows (Smart App Control ou antivírus) bloqueou um arquivo do Headroom',
+    codificacao: 'erro de codificação de texto do Python',
+    dependencia: 'faltam partes do Headroom (reinstale)',
+  };
+
+  // Sobe o proxy numa porta e espera ele responder. Devolve true se ficou no ar.
+  const subir = async (porta) => {
+    ultimas = [];
+    const extra = semRust ? ['--no-optimize'] : [];
+    log(`$ headroom proxy --port ${porta}${extra.length ? ` ${extra.join(' ')}` : ''}`, 'cmd');
+    const alvo = resolverExecutavel(estado.caminho ?? 'headroom', ['proxy', '--port', String(porta), ...extra]);
+    const filho = spawn(alvo.comando, alvo.args, { env: envProxy(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    proxy = filho;
+    let saiu = null;
+    const repassar = (d) =>
+      d
+        .toString()
+        .split('\n')
+        .forEach((l) => {
+          if (!l.trim()) return;
+          ultimas.push(l);
+          if (ultimas.length > 60) ultimas.shift();
+          log(l);
+        });
+    filho.stdout.on('data', repassar);
+    filho.stderr.on('data', repassar);
+    filho.on('error', (e) => {
+      ultimas.push(e.message);
+      saiu = -1;
+    });
+    filho.on('close', (codigo) => {
+      saiu = codigo ?? 0;
+      if (proxy === filho) {
+        proxy = null;
+        const estava = estado.rodando;
+        estado.rodando = false;
+        if (!filho.__parado) {
+          log(`● Proxy encerrado (código ${codigo})`, codigo ? 'erro' : 'info');
+          // Caiu depois de estar no ar: tenta subir de novo sozinho (até 3 vezes em 10 minutos).
+          if (estava) reerguer('o proxy caiu');
+        }
+        publicar();
+      }
+    });
+    // Python no Windows pode levar uns segundos na primeira vez (antivírus, compilação); espera até 45 s.
+    for (let i = 0; i < 90 && saiu === null; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      if ((await ehHeadroom(porta)) || (i > 6 && (await verificarPorta(porta)))) return true;
+    }
+    if (saiu === null) {
+      filho.__parado = true;
+      matar(filho);
+      ultimas.push('não respondeu em 45 s');
+    }
+    if (proxy === filho) proxy = null;
+    return false;
+  };
+
   const iniciar = async () => {
     const a = await ajustes();
-    if (await verificarPorta(a.porta)) {
+    if (await ehHeadroom(a.porta)) {
       estado.rodando = true;
+      estado.porta = a.porta;
       log(`● Proxy já respondendo na porta ${a.porta}`, 'info');
+      vigiar();
       return;
     }
     if (!(await detectarInstalacao())) throw new Error('Headroom não está instalado.');
-    log(`$ headroom proxy --port ${a.porta}`, 'cmd');
-    const alvo = resolverExecutavel(estado.caminho ?? 'headroom', ['proxy', '--port', String(a.porta)]);
-    proxy = spawn(alvo.comando, alvo.args, { env: { ...process.env, NO_COLOR: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
-    const repassar = (d) => d.toString().split('\n').forEach((l) => l.trim() && log(l));
-    proxy.stdout.on('data', repassar);
-    proxy.stderr.on('data', repassar);
-    proxy.on('close', (codigo) => {
-      proxy = null;
-      estado.rodando = false;
-      log(`● Proxy encerrado (código ${codigo})`, codigo ? 'erro' : 'info');
-      publicar();
-    });
-    for (let i = 0; i < 20 && proxy; i++) {
-      await new Promise((r) => setTimeout(r, 500));
-      if (await verificarPorta(a.porta)) {
+    // Tenta a porta escolhida e, se o Windows bloquear ou outro programa estiver nela, as próximas.
+    const portas = [a.porta, ...Array.from({ length: 6 }, (_, i) => a.porta + 1 + i), 18787, 28787];
+    let ultimoMotivo = '';
+    for (const porta of portas) {
+      if (porta > 65535) continue;
+      if (porta !== a.porta && (await verificarPorta(porta))) continue;
+      if (porta === a.porta && (await verificarPorta(porta))) {
+        ultimoMotivo = 'porta-ocupada';
+        log(`⚠ A porta ${porta} está ocupada por outro programa; tentando a próxima.`, 'aviso');
+        continue;
+      }
+      if (await subir(porta)) {
         estado.rodando = true;
-        log(`✓ Proxy no ar em 127.0.0.1:${a.porta}`, 'ok');
+        estado.porta = porta;
+        estado.modo = semRust ? 'simples' : 'normal';
+        if (porta !== a.porta) {
+          await store.salvar('ajustes', { id: 'headroom', ...a, porta });
+          log(`✓ A porta ${a.porta} não serviu; o Headroom ficou na ${porta} (salvo).`, 'ok');
+        }
+        log(`✓ Proxy no ar em 127.0.0.1:${porta}${semRust ? ' (modo simples: sem compressão, o Windows bloqueou a parte otimizada)' : ''}`, 'ok');
+        vigiar();
         return;
       }
+      ultimoMotivo = motivo() || ultimoMotivo;
+      if (ultimoMotivo === 'dll-bloqueada' && !semRust) {
+        semRust = true;
+        log('⚠ O Windows bloqueou a parte compilada do Headroom. Tentando o modo simples.', 'aviso');
+        if (await subir(porta)) {
+          estado.rodando = true;
+          estado.porta = porta;
+          estado.modo = 'simples';
+          log(`✓ Proxy no ar em 127.0.0.1:${porta} (modo simples)`, 'ok');
+          vigiar();
+          return;
+        }
+        ultimoMotivo = motivo() || ultimoMotivo;
+      }
+      // Só vale tentar outra porta quando o problema é a porta.
+      if (!['porta-bloqueada', 'porta-ocupada'].includes(ultimoMotivo)) break;
     }
-    if (!estado.rodando) throw new Error('O proxy não respondeu. Veja o log do Headroom.');
+    const linha = ultimas.filter((l) => /error|erro|exception|traceback|failed|denied/i.test(l)).slice(-1)[0] ?? ultimas.slice(-1)[0] ?? '';
+    throw new Error(`O proxy não subiu${ultimoMotivo ? `: ${EXPLICA[ultimoMotivo]}` : ''}.${linha ? ` Última mensagem: ${linha.trim().slice(0, 200)}` : ''} As IAs seguem direto, sem o Headroom.`);
   };
+
+  // A cada 30 s confere se o proxy segue respondendo; se não, as IAs vão direto e ele tenta subir de novo.
+  const vigiar = () => {
+    clearInterval(vigia);
+    vigia = setInterval(async () => {
+      const a = await ajustes();
+      if (!a.usar) return clearInterval(vigia);
+      const porta = estado.porta ?? a.porta;
+      const ok = await ehHeadroom(porta);
+      if (ok !== estado.rodando) {
+        estado.rodando = ok;
+        publicar();
+      }
+      if (!ok && !proxy) reerguer('o proxy parou de responder');
+    }, 30_000);
+    vigia.unref?.();
+  };
+
+  let reerguendo = false;
+  const reerguer = async (porque) => {
+    if (reerguendo) return;
+    const agora = Date.now();
+    reinicios = reinicios.filter((t) => agora - t < 10 * 60_000);
+    if (reinicios.length >= 3) {
+      estado.erro = 'O Headroom caiu várias vezes seguidas. As IAs seguem direto; veja o log e clique em Usar Headroom para tentar de novo.';
+      log(`✗ ${estado.erro}`, 'erro');
+      clearInterval(vigia);
+      return publicar();
+    }
+    reinicios.push(agora);
+    reerguendo = true;
+    log(`↻ ${porque}; subindo de novo…`, 'aviso');
+    try {
+      await iniciar();
+      estado.erro = '';
+    } catch (e) {
+      estado.erro = e.message;
+      log(`✗ ${e.message}`, 'erro');
+    } finally {
+      reerguendo = false;
+      publicar();
+    }
+  };
+
+  // Uma IA não conseguiu falar com o proxy no meio de uma chamada (ela já foi refeita direto).
+  definirAoFalharProxy((texto) => {
+    log(`⚠ Uma IA não conseguiu passar pelo Headroom (${String(texto).trim().split('\n').pop().slice(0, 140)}). Ela foi refeita direto.`, 'aviso');
+    estado.rodando = false;
+    publicar();
+    ehHeadroom(estado.porta ?? PADRAO.porta).then((ok) => {
+      if (ok) {
+        estado.rodando = true;
+        publicar();
+      } else if (!proxy) reerguer('o proxy não respondeu a uma IA');
+    });
+  });
 
   const configurar = async (mudancas) => {
     const a = await ajustes();
@@ -159,6 +341,7 @@ export const criarHeadroom = ({ store, bus, raiz }) => {
     if (mudancas.usar !== undefined) a.usar = !!mudancas.usar;
     await store.salvar('ajustes', { id: 'headroom', ...a });
     estado.erro = '';
+    reinicios = [];
     try {
       if (a.usar) {
         if (mudancas.porta !== undefined) await parar();
@@ -176,7 +359,7 @@ export const criarHeadroom = ({ store, bus, raiz }) => {
     return new Promise((resolve) => {
       let saida = '';
       const alvo = resolverExecutavel(estado.caminho ?? 'headroom', ['savings']);
-      const filho = spawn(alvo.comando, alvo.args, { env: { ...process.env, NO_COLOR: '1' } });
+      const filho = spawn(alvo.comando, alvo.args, { env: envProxy(), windowsHide: true });
       filho.stdout.on('data', (d) => (saida += d));
       filho.stderr.on('data', (d) => (saida += d));
       filho.on('error', (e) => resolve(e.message));
@@ -188,7 +371,7 @@ export const criarHeadroom = ({ store, bus, raiz }) => {
   const envPara = async (ia) => {
     const a = await ajustes();
     if (!a.usar || !estado.rodando || !COMPATIVEIS.includes(ia.tipo) || !a.ias.includes(ia.id)) return {};
-    const base = `http://127.0.0.1:${a.porta}`;
+    const base = `http://127.0.0.1:${estado.porta ?? a.porta}`;
     return { ANTHROPIC_BASE_URL: base, OPENAI_BASE_URL: `${base}/v1` };
   };
 

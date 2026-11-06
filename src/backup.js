@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { SEGREDO } from './publico.js';
 
 // Backup do app: um arquivo .json com tudo o que é seu (equipes, treinos, agentes, tela livre,
 // projetos, tarefas, IAs, máquinas, ajustes) e, se quiser, o cérebro inteiro.
@@ -43,7 +44,9 @@ export const criarBackup = ({ cfg, store, bus, vault, versao }) => {
     for (const p of partes.filter((x) => PARTES[x])) {
       for (const c of PARTES[p].colecoes) {
         let itens = await store.listar(c);
-        if (c === 'ias' && !segredos) itens = itens.map((i) => ({ ...i, env: Object.fromEntries(Object.keys(i.env ?? {}).map((k) => [k, ''])) }));
+        // Variáveis com cara de segredo ficam vazias; as outras (ex.: a pasta de cada conta) entram sempre.
+        const semValores = (env) => Object.fromEntries(Object.entries(env ?? {}).map(([k, v]) => [k, SEGREDO.test(k) ? '' : v]));
+        if (c === 'ias' && !segredos) itens = itens.map((i) => ({ ...i, env: semValores(i.env), contas: (i.contas ?? []).map((ct) => ({ ...ct, env: semValores(ct.env) })) }));
         dados[c] = itens;
       }
     }
@@ -96,6 +99,7 @@ export const criarBackup = ({ cfg, store, bus, vault, versao }) => {
         if (!item?.id) continue;
         // Chaves que não vieram no backup (vazias) continuam as que você já tinha neste computador.
         if (colecao === 'ias' && item.env) item.env = Object.fromEntries(Object.entries(item.env).map(([k, v]) => [k, v || atuais[item.id]?.env?.[k] || '']));
+        if (colecao === 'ias' && item.contas) item.contas = item.contas.map((ct) => ({ ...ct, env: Object.fromEntries(Object.entries(ct.env ?? {}).map(([k, v]) => [k, v || atuais[item.id]?.contas?.find((x) => x.id === ct.id)?.env?.[k] || ''])) }));
         await store.salvar(colecao, item);
       }
     }
@@ -120,7 +124,8 @@ export const criarBackup = ({ cfg, store, bus, vault, versao }) => {
     try {
       fs.mkdirSync(pastaAuto, { recursive: true });
       const arquivo = path.join(pastaAuto, `auto-${motivo}-${carimbo()}.json`);
-      fs.writeFileSync(arquivo, JSON.stringify(await montar({ cerebro: false, segredos: true })));
+      // Sem chaves em texto puro nos backups automáticos: ao restaurar, as chaves atuais continuam valendo.
+      fs.writeFileSync(arquivo, JSON.stringify(await montar({ cerebro: false, segredos: false })));
       const antigos = fs
         .readdirSync(pastaAuto)
         .filter((n) => n.startsWith('auto-'))

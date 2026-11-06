@@ -18,6 +18,34 @@ const OCIOSO_PARA_ENTREGAR = 1500;
 const SILENCIO_FIM_RAJADA = 20_000;
 const RAJADA_RELEVANTE = 8_000;
 
+// O Claude Code pergunta "você confia nesta pasta?" ao abrir numa pasta nova. A pasta foi escolhida por você no
+// agente, então o app marca como confiável no arquivo de configuração dele antes de abrir (o mesmo que o "Yes").
+export const confiarPasta = (pasta, configDir) => {
+  try {
+    const arq = path.join(configDir || os.homedir(), '.claude.json');
+    let cfgClaude = {};
+    if (fs.existsSync(arq)) {
+      const bruto = fs.readFileSync(arq, 'utf8');
+      try {
+        cfgClaude = JSON.parse(bruto);
+      } catch {
+        return false; // arquivo em uso ou estranho: não mexe (o vigia responde a pergunta na tela)
+      }
+    }
+    const chaves = [...new Set([pasta, pasta.replace(/\\/g, '/')])];
+    cfgClaude.projects ??= {};
+    if (chaves.every((k) => cfgClaude.projects[k]?.hasTrustDialogAccepted)) return true;
+    for (const k of chaves) cfgClaude.projects[k] = { ...(cfgClaude.projects[k] ?? {}), hasTrustDialogAccepted: true };
+    const tmp = `${arq}.orq-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(cfgClaude, null, 2));
+    fs.renameSync(tmp, arq);
+    return true;
+  } catch {
+    return false;
+  }
+};
+const PERGUNTA_CONFIANCA = /trust this folder|trust the files in this folder|Do you trust|Quick safety check/i;
+
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(\x07|\x1b\\)|\x1b[()][0-9A-B]|[\x00-\x08\x0b-\x1f]/g;
 const agora = () => new Date().toISOString();
 const erro = (status, mensagem) => Object.assign(new Error(mensagem), { status });
@@ -46,7 +74,7 @@ const ultimasLinhas = (buffer, n = 4) =>
     .slice(-n)
     .join('\n');
 
-export const criarAgentes = ({ cfg, store, bus, cerebro, headroom, atividade }) => {
+export const criarAgentes = ({ cfg, store, bus, cerebro, headroom, atividade, comunicar = () => {} }) => {
   const sessoes = new Map();
   const canais = new Map(); // agenteId -> Set(fn) — independente do processo, para o front reconectar sem perder nada
   const buffersFinais = new Map();
@@ -211,6 +239,8 @@ export const criarAgentes = ({ cfg, store, bus, cerebro, headroom, atividade }) 
     delete env.NO_COLOR;
     delete env.FORCE_COLOR;
 
+    if (ia.tipo === 'claude' && !maquina) confiarPasta(cwd, env.CLAUDE_CONFIG_DIR);
+
     let processo;
     try {
       processo = pty.spawn(comando, args, { name: 'xterm-256color', cols, rows, cwd, env });
@@ -373,6 +403,7 @@ export const criarAgentes = ({ cfg, store, bus, cerebro, headroom, atividade }) 
     };
     await store.salvar('mensagens', mensagem);
     bus.emitir({ tipo: 'mensagem', mensagem });
+    comunicar({ de: origem.id === 'operador' ? 'voce' : `agente:${origem.id}`, para: `agente:${destino.id}`, tipo: 'agente', resumo: texto });
     atividade.registrar({ tipo: 'mensagem', agente: destino.id, texto: `${origem.nome} → ${destino.nome}: ${texto}${refsOk.length ? ` (cérebro: ${refsOk.join(', ')})` : ''}` });
     sessoes.get(destino.id)?.fila.push(mensagem);
     return mensagem;
@@ -391,7 +422,27 @@ export const criarAgentes = ({ cfg, store, bus, cerebro, headroom, atividade }) 
       const ocioso = Date.now() - s.ultimaSaida;
       if (s.entregando || s.avulso) continue;
 
+      // Pergunta de confiança na pasta ainda na tela: responde "sim" (nunca deixa a apresentação cair nela,
+      // porque o Enter da apresentação escolhia "No, exit" e o agente fechava).
+      if (!s.confiou && ocioso >= 600) {
+        const cauda = s.buffer.slice(-4000).replace(ANSI, '');
+        if (PERGUNTA_CONFIANCA.test(cauda) && /Yes|Sim/.test(cauda)) {
+          s.confiou = true;
+          const linhas = cauda.split(/\r?\n/);
+          const marcada = linhas.find((l) => /^\s*[>❯›]/.test(l)) ?? '';
+          s.entregando = true;
+          if (/No|N[aã]o|exit/i.test(marcada)) s.processo.write('\x1b[B');
+          await new Promise((r) => setTimeout(r, 200));
+          s.processo.write('\r');
+          s.entregando = false;
+          s.inicio = Date.now(); // a apresentação espera a tela do Claude abrir
+          s.ultimaSaida = Date.now();
+          continue;
+        }
+      }
+
       if (s.briefingPendente && ocioso >= 2500 && Date.now() - s.inicio >= 2500) {
+        if (PERGUNTA_CONFIANCA.test(s.buffer.slice(-1500).replace(ANSI, '')) && !s.confiou) continue;
         s.briefingPendente = false;
         const a = await store.obter('agentes', id);
         if (a) await digitar(s, briefingDe(a));

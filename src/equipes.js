@@ -2,7 +2,9 @@
 // Só o gestor e o avaliador vêm prontos, porque fazem parte de toda tarefa.
 // A IA de cada equipe sai sempre das IAs que o usuário escolheu usar.
 
-const ORDEM_PADRAO = ['claude', 'antigravity', 'gemini', 'codex', 'ollama'];
+import { dnaDe, temDNA } from './dna.js';
+
+const ORDEM_PADRAO = ['claude', 'antigravity', 'codex', 'ollama'];
 
 // Equipes que versões antigas do app criavam sozinhas, sem perguntar o objetivo.
 export const EQUIPES_ANTIGAS = ['pesquisa', 'seguranca', 'debug', 'codigo', 'limpo'];
@@ -53,7 +55,13 @@ export const criarEquipes = ({ store, bus, vault, padrao }) => {
       const aptas = iasParaEquipe(ias, { prefere: preferenciaDe(e), requer: e.requer, permitidas });
       const ids = new Set(aptas.map((i) => i.id));
       let principal = ids.has(e.principal) ? e.principal : aptas[0]?.id ?? '';
-      let reserva = ids.has(e.reserva) && e.reserva !== principal ? e.reserva : aptas.find((i) => i.id !== principal)?.id ?? '';
+      // Redundância real: a reserva é de outro provedor (ex.: principal Claude, reserva Antigravity),
+      // para um limite ou queda do provedor não derrubar as duas.
+      const tipoP = ias.find((i) => i.id === principal)?.tipo;
+      const outroProvedor = aptas.find((i) => i.id !== principal && i.tipo !== tipoP)?.id;
+      const reservaAtual = ids.has(e.reserva) && e.reserva !== principal ? e.reserva : null;
+      const mesmoProvedor = reservaAtual && ias.find((i) => i.id === reservaAtual)?.tipo === tipoP;
+      let reserva = reservaAtual && !(mesmoProvedor && outroProvedor) ? reservaAtual : outroProvedor ?? aptas.find((i) => i.id !== principal)?.id ?? '';
       if (principal === e.principal && reserva === (e.reserva ?? '')) continue;
       await salvar({ ...e, principal, reserva });
     }
@@ -61,12 +69,14 @@ export const criarEquipes = ({ store, bus, vault, padrao }) => {
 
   const nova = (def, ias) => {
     const aptas = iasParaEquipe(ias, { prefere: def.prefere, requer: def.requer });
+    const dna = dnaDe(def);
     return {
-      instrucoes: '',
       ...def,
+      instrucoes: temDNA(def.instrucoes) ? def.instrucoes : [dna.instrucoes, String(def.instrucoes ?? '').trim()].filter(Boolean).join('\n\nInstruções extras:\n'),
+      caminho: def.caminho?.length ? def.caminho : dna.caminho,
       requer: def.requer ?? null,
       principal: aptas[0]?.id ?? '',
-      reserva: aptas[1]?.id ?? '',
+      reserva: aptas.find((i) => i.id !== aptas[0]?.id && i.tipo !== aptas[0]?.tipo)?.id ?? aptas[1]?.id ?? '',
       ativa: true,
       aprovacao: false,
       criada: new Date().toISOString(),
@@ -121,5 +131,18 @@ export const criarEquipes = ({ store, bus, vault, padrao }) => {
     }
   };
 
-  return { ajustar, garantirFixas, aplicarObjetivos, completarFamilias, definicoes: defs };
+  // Toda equipe precisa do DNA (prompt comportamental de base) e de um caminho na árvore do cérebro.
+  // Equipes antigas sem isso recebem agora; instruções curtas que você escreveu ficam como "extras".
+  // Instruções longas (suas ou de treino) não são tocadas.
+  const garantirDNA = async () => {
+    for (const e of await store.listar('equipes')) {
+      const dna = dnaDe(e);
+      const mudar = {};
+      if (!temDNA(e.instrucoes)) mudar.instrucoes = [dna.instrucoes, String(e.instrucoes ?? '').trim()].filter(Boolean).join('\n\nInstruções extras:\n');
+      if (!e.caminho?.length) mudar.caminho = dna.caminho;
+      if (Object.keys(mudar).length) await salvar({ ...e, ...mudar, dnaEm: new Date().toISOString() });
+    }
+  };
+
+  return { ajustar, garantirFixas, aplicarObjetivos, completarFamilias, garantirDNA, definicoes: defs };
 };

@@ -66,6 +66,7 @@ export const criarTelaCanvas = ({ S, $, esc, api, toast, token, ajuda, comAjuda,
       <div class="cv-barra">
         <nav class="cv-espacos" id="cv-espacos" aria-label="Espaço"></nav>
         <div class="cresce"></div>
+        <button type="button" class="btn contorno pequeno" data-cv="iniciar-todos" data-dica="Inicia de uma vez todos os agentes parados deste espaço.">Iniciar todos</button>
         <button type="button" class="btn pequeno" data-cv="novo-agente" data-dica="Abre um ou mais terminais com a IA que você escolher.">Novos agentes</button>
         <button type="button" class="pill cheia" data-cv="nova-nota" data-dica="Bloco de texto para anotar ideias. Duplo clique no fundo também cria uma.">Nota</button>
         <button type="button" class="pill cheia" data-cv="novo-rascunho" data-dica="Área para desenhar à mão livre: fluxos, telas, setas.">Rascunho</button>
@@ -711,6 +712,15 @@ export const criarTelaCanvas = ({ S, $, esc, api, toast, token, ajuda, comAjuda,
       n.tracos?.pop();
       renderTudo();
       salvar();
+    },
+    'iniciar-todos': async () => {
+      const parados = (C.doc?.nos ?? []).filter((n) => n.tipo === 'agente' && agente(n.agenteId) && agente(n.agenteId).estado !== 'rodando');
+      if (!parados.length) return toast('Todos os agentes deste espaço já estão rodando.');
+      for (const n of parados) {
+        const r = C.els.get(n.id);
+        await api('POST', `/api/agentes/${encodeURIComponent(n.agenteId)}/iniciar`, r?.tam ?? {}).catch((e) => toast(`${agente(n.agenteId)?.nome}: ${e.message}`, 'erro'));
+      }
+      toast(`${parados.length} ${parados.length === 1 ? 'agente iniciado' : 'agentes iniciados'}.`);
     },
     iniciar: async (b) => {
       const r = C.els.get(b.closest('.no').dataset.no);

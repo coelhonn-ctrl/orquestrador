@@ -19,15 +19,15 @@ O Singularize Orquestrador é um app de desktop: abre numa janela própria, sem 
 
 **Windows**
 
-1. Dois cliques em `Singularize-Orquestrador-Setup-1.0.0.exe`.
+1. Dois cliques em `Singularize-Orquestrador-Setup-<versão>.exe` (ex.: `Singularize-Orquestrador-Setup-1.3.0.exe`).
 2. Se o Windows mostrar "O Windows protegeu o computador", clique em **Mais informações** e depois em **Executar assim mesmo** (o instalador ainda não é assinado).
 3. Siga o instalador. Ele instala só para o seu usuário, sem pedir senha de administrador, e cria atalhos na área de trabalho e no menu Iniciar.
 4. Para desinstalar: **Configurações → Aplicativos → Singularize Orquestrador → Desinstalar**.
 
 **Linux**
 
-1. Baixe `Singularize-Orquestrador-1.0.0.AppImage`.
-2. Dê permissão de execução: botão direito → **Propriedades → Permitir executar como programa**, ou no terminal `chmod +x Singularize-Orquestrador-1.0.0.AppImage`.
+1. Baixe `Singularize-Orquestrador-<versão>.AppImage`.
+2. Dê permissão de execução: botão direito → **Propriedades → Permitir executar como programa**, ou no terminal `chmod +x Singularize-Orquestrador-*.AppImage`.
 3. Dois cliques no arquivo para abrir.
 
 Feche a janela do app para encerrar. Se houver equipes ou agentes trabalhando, ele pergunta antes de fechar. Abrir o atalho de novo com o app já aberto só traz a janela para a frente.
@@ -40,14 +40,14 @@ Na primeira vez, o app pergunta três coisas antes de começar.
 
 **Passo 2: para que você vai usar o app.** Marque seus objetivos (Desenvolver software, Pesquisa e estudo, Escrita e conteúdo, Dados e planilhas, Marketing e vendas…). O app cria só as equipes desses objetivos; cada cartão mostra quais. Se preferir, clique em **Pular esta etapa**: nenhuma equipe é criada, e o gestor monta as equipes conforme os pedidos chegam (veja Equipes, mais abaixo).
 
-**Passo 3: quais IAs usar.** Aparecem o Claude Code, o Antigravity (Google), o Codex, o Gemini CLI e o Ollama, cada um marcado como **Instalada neste computador** ou **Não instalada**. O app **nunca instala nada sozinho**:
+**Passo 3: quais IAs usar.** Aparecem o Claude Code, o Antigravity (Google), o Codex e o Ollama, cada um marcado como **Instalada neste computador** ou **Não instalada**. O app **nunca instala nada sozinho**:
 
 1. Marque as IAs que quer usar e clique em **Continuar**.
 2. Se alguma marcada não estiver instalada, a tela **Antes de instalar** mostra o que será instalado e o comando de cada uma. Clique em **Instalar e continuar** só se concordar, ou em **Voltar**.
 3. Cada instalação abre num terminal dentro do app. Se pedir senha ou confirmação, responda nele.
-4. Com a IA instalada, clique em **Entrar na conta** ao lado dela. É o login normal da ferramenta: o app usa a conta que você já tem, sem custo à parte. No Claude Code, se aparecer "Accessing workspace… Do you trust this folder?", escolha **Yes, I trust this folder**; quando aparecer a caixa de digitar, o login está feito e você pode digitar `/exit`.
+4. Assim que uma IA termina de instalar, o login dela já abre. É o login normal da ferramenta: o app usa a conta que você já tem, sem custo à parte. No Claude Code, o navegador abre para você entrar; quando o login termina, o terminal fecha sozinho, o app testa a conta e já coloca ela em uso. Para uma IA que já estava instalada, use **Entrar na conta** ao lado dela.
 
-> Para usar o Google com a sua conta pessoal, escolha o **Antigravity**. Em 18/06/2026 o Google parou de aceitar contas pessoais no Gemini CLI e o substituiu pelo Antigravity CLI; o Gemini CLI agora só funciona com chave de API paga.
+> Para usar o Google, escolha o **Antigravity**. O Gemini CLI saiu do app: o Google deixou de oferecê-lo para uso pelo terminal com conta pessoal. Se você tinha o Gemini CLI cadastrado, o app remove sozinho ao atualizar e passa os agentes que usavam ele para o Antigravity (ou o Claude).
 5. Clique em **Ir para o app**.
 
 Para só conhecer o app sem nenhuma IA real, marque **Modo demonstração**.
@@ -96,7 +96,6 @@ Na tela **IAs** ficam todas as ferramentas que o app pode usar, marcadas como **
 | --- | --- | --- |
 | Claude Code | Conta Claude (assinatura Pro ou Max) | Sim |
 | Antigravity CLI | Conta Google (tem plano gratuito) | Sim |
-| Gemini CLI | Só chave de API paga do Gemini (desde 18/06/2026 não aceita conta pessoal) | Sim |
 | Codex CLI | Conta do ChatGPT | Sim |
 | Ollama | Um modelo baixado; roda no seu computador, sem internet | Não, só conversa |
 | Terminal | Nada, é o shell da máquina | Sim (só na tela livre) |
@@ -104,13 +103,50 @@ Na tela **IAs** ficam todas as ferramentas que o app pode usar, marcadas como **
 
 - **Escolher IAs**: volta à escolha do primeiro acesso, para marcar ou desmarcar IAs.
 - **Instalar**: aparece numa IA que não está instalada. Mostra o comando e só instala se você confirmar.
-- **Entrar na conta**: abre o login da ferramenta num terminal dentro do app (no Ollama, baixa o modelo).
+- **Entrar na conta**: abre o login da ferramenta num terminal dentro do app (no Ollama, baixa o modelo). Ao terminar, o app testa a IA sozinho e já coloca em uso se ela respondeu.
 - **Procurar de novo neste computador**: use se você instalou uma IA por fora.
 - **Usar**: desmarcado, o gestor para de mandar trabalho para aquela IA.
 - **Testar**: manda um pedido curto e mostra se ela respondeu.
-- **Configurar**: comando, modelo, argumentos e variáveis de ambiente.
+- **Configurar**: comando, modelo, argumentos, variáveis de ambiente e o **modelo de cada nível** (rápido, padrão, forte).
 
-Para usar **duas contas** da mesma ferramenta, cadastre outra IA do mesmo tipo e, em variáveis de ambiente, aponte para outra pasta de configuração (por exemplo `CLAUDE_CONFIG_DIR=~/.claude-trabalho`). As variáveis ficam só no app e aparecem como `••••` na tela.
+### Sub-agentes
+
+Cada equipe trabalha como um supervisor: quando a etapa tem partes independentes (fontes diferentes, arquivos ou módulos diferentes, seções de um texto), ela divide e delega a **sub-agentes**, que rodam em paralelo e devolvem só o resultado. O supervisor junta, confere e responde ao gestor. Isso deixa o trabalho mais rápido e o contexto de cada um menor.
+
+- No **Claude Code**, o app já libera a ferramenta de sub-agentes (Agent) no modo sem tela. Não precisa configurar nada.
+- No Antigravity, a equipe usa os sub-agentes se a ferramenta tiver. Codex e Ollama trabalham sem.
+- Em etapas simples, a equipe só divide se houver mesmo partes independentes, para não gastar à toa.
+
+### Contas em rodízio (várias contas por IA)
+
+Cada IA pode ter **várias contas**. Quando uma bate o limite de uso, o app troca na hora para a próxima conta livre, sem parar a tarefa. O contexto não se perde, porque está no cérebro. Só quando todas as contas batem o limite a etapa passa para a IA reserva.
+
+Em **IAs → Configurar**, na parte **Contas desta IA**:
+
+- **Com outro login** (o normal para o Claude: outra assinatura): deixe **Perfil separado** marcado, dê um nome e clique em **Adicionar conta**. O login dela já abre no navegador (no Claude, `claude auth login`); quando termina, o terminal fecha sozinho, o app **testa a conta** e ela entra no rodízio. Cada conta fica numa pasta própria.
+- **Com chave**: desmarque **Perfil separado**, escreva o nome e a chave (ex.: `ANTHROPIC_API_KEY=...`) e clique em **Adicionar conta**.
+- **Testar** confere cada conta. **Liberar** devolve ao rodízio uma conta marcada sem cota. **Entrar nesta conta** refaz o login (e testa de novo).
+
+A conta que bate o limite fica fora até **a hora em que a cota renova**, lida da própria mensagem da IA (ex.: "resets 5pm"); sem essa informação, espera 1 hora. Se **todas** as contas e IAs que servem para a etapa ficarem sem cota, a tarefa (ou o treino) **pausa** e continua sozinha na hora em que a primeira cota voltar. **Tentar agora**, na tarefa, força antes.
+
+O app também não fica esperando uma IA presa em "tentando de novo": ao ver a mensagem de limite no erro, ele encerra e passa para a próxima conta ou IA na hora.
+
+### Modelo por dificuldade (economia de tokens)
+
+O app não manda tudo para o modelo mais caro. Cada chamada usa um de três níveis: **rápido**, **padrão** ou **forte**. No Claude Code, o padrão é haiku, sonnet e opus. Dá para trocar em **Configurar**, em cada IA. Em branco, a IA usa o modelo padrão dela.
+
+Como o nível é escolhido:
+
+- O gestor planeja no modelo padrão e diz se cada etapa é **simples**, **média** ou **difícil**. Simples vai para o rápido, média para o padrão, difícil para o forte.
+- **Equipe que já sabe** (treinada com nota na meta, ou com várias notas validadas na área) desce um nível.
+- **Equipe que vem errando** (o avaliador apontou problema mais vezes do que aprovou) sobe um nível.
+- **Pergunta factual curta** (ex.: "qual a capital da Austrália?") vai direto no modelo rápido, sem avaliador.
+- **Se o avaliador reprovar**, as etapas que rodaram num modelo mais leve são refeitas uma vez no forte, e o avaliador confere de novo.
+- **Treinos** usam o forte para quem ensina e corrige, e o padrão para quem responde: o conhecimento é consolidado no modelo forte e usado no dia a dia no mais leve.
+
+Se a sua conta não tiver algum modelo, o app usa o padrão da ferramenta e avisa no terminal da equipe. Para desligar tudo isso, desmarque **Escolher o modelo pela dificuldade** em IAs: cada IA passa a usar o modelo dela em tudo.
+
+**Ver consumo** (em IAs) mostra chamadas e tokens estimados por nível, por equipe, por IA e por tarefa, e quanto saiu mais barato que usar sempre o modelo forte. Os tokens são estimados (cerca de 4 caracteres por token) a partir do que foi enviado e recebido; o que a IA lê sozinha do disco não entra.
 
 Com o **Modo demonstração** ligado e nenhuma IA real pronta, uma faixa amarela avisa que as respostas são de exemplo.
 
@@ -146,7 +182,11 @@ O gestor escolhe as equipes pelo **propósito** do pedido. Uma pesquisa sobre pa
 ### Mandar uma tarefa
 
 1. Em **Nova tarefa**, descreva o **resultado** que você quer, como explicaria para alguém da equipe. Não precisa dizer os passos.
-2. Anexe prints ou fotos se ajudar (botão **Anexar fotos**, ou cole a imagem direto no campo).
+2. Anexe o que ajudar: **qualquer arquivo** (PDF, Word, Excel, PowerPoint, CSV, código, texto, imagens, zip). Use **Anexar arquivos**, cole no campo ou arraste para cima do pedido. Até 20 arquivos por tarefa, 50 MB cada.
+   - Texto, CSV e código vão com o conteúdo direto na nota da tarefa.
+   - Word, PowerPoint e Excel: o app extrai o texto para as IAs conseguirem ler.
+   - PDF e imagens: as IAs abrem pelo caminho do arquivo.
+   - Os anexos ficam no cérebro, em `30-anexos`, e aparecem na página da tarefa para baixar.
 3. Clique em **Colocar na fila** (ou `Ctrl+Enter`).
 
 Num projeto **Manual**, o campo de tarefa dá lugar a um atalho para a tela livre do projeto.
@@ -159,14 +199,47 @@ Num projeto **Manual**, o campo de tarefa dá lugar a um atalho para a tela livr
 
 Quando uma equipe, o avaliador ou um plano para aprovar precisa de você, aparece uma pergunta em amarelo no meio da tela. Clique numa opção ou escreva a resposta, e a tarefa continua.
 
+**Concluídas e histórico.** Depois que você aprova, a tarefa vai para **Concluídas**, na esquerda (as 5 mais recentes). **Ver histórico** abre todas as solicitações do projeto, com busca no pedido e nas respostas e filtro por situação (concluídas, para revisar, em andamento, com erro, canceladas). De lá dá para abrir qualquer uma, reler as respostas e fazer novas perguntas às equipes.
+
 **Falar com uma equipe** manda uma pergunta ou ajuste rápido direto para uma equipe, sem passar pela fila.
+
+### Ver a comunicação em 3D
+
+Enquanto as equipes trabalham, abra **Comunicação** no topo, ou **Ver comunicação** na página da tarefa ou do treino. Aparece um grafo 3D, ao vivo, de quem está falando com quem:
+
+- **Pontos**: você, o gestor, cada equipe (supervisor), cada IA, o avaliador, o treinador, as cópias em treino e os agentes da tela livre. A cor de cada um está em **Quem é quem**.
+- **Linhas**: cada par que já conversou. Cada mensagem nova corre pela linha como um ponto de luz, na cor do tipo: plano, etapa, pedido à IA, resposta, falha, avaliação, pergunta, caso de teste, nota.
+- **Ao vivo**, à direita: a lista das mensagens, da mais nova para a mais antiga. Clique numa para ler o texto inteiro.
+- **Mostrar**: escolha uma solicitação ou um treino para ver só a conversa dele, ou **Tudo, ao vivo**.
+- Arraste para girar, role para aproximar, clique num ponto para ver só as mensagens dele. **Pausar** congela o grafo sem perder nada; **Enquadrar** centraliza.
+
+O app guarda as últimas 3000 mensagens, então dá para ver a conversa de uma tarefa depois que ela termina.
 
 ### Revisar a entrega
 
-Abra a tarefa em **Prontas para revisar**. A página mostra o pedido, o que cada equipe fez, o que o avaliador conferiu e a nota completa da tarefa no cérebro.
+Abra a tarefa em **Prontas para revisar**. A página mostra:
+
+- **O que as equipes responderam**: a entrega de cada equipe na íntegra (o texto, a pesquisa com as fontes, ou o que mudou no código), com a IA e o modelo usado (rápido, padrão ou forte). Se a etapa foi refeita no modelo forte, a primeira versão fica guardada logo abaixo.
+- **O avaliador conferiu**: cada critério com ✓ ou ✗ e o que o avaliador viu.
+- **Consumo desta tarefa**: chamadas, tokens estimados e quanto saiu mais barato do que usar só o modelo forte.
+- A nota completa da tarefa no cérebro.
+
+**Perguntar ou questionar.** Para tirar uma dúvida ou contestar algo da entrega sem refazer a tarefa:
+
+1. Clique em **Questionar** na resposta da equipe, ou vá até **Perguntar ou questionar**.
+2. Em **Para**, escolha a equipe, o avaliador ou o **Gestor** (visão geral da tarefa).
+3. Escreva a pergunta e clique em **Enviar pergunta**.
+
+A resposta aparece ali mesmo, em forma de conversa, e a tarefa não volta para a fila. A equipe responde com base no que entregou; se você apontou um erro e ela concorda, ela corrige (e diz o que mudou). Dá para fazer quantas perguntas quiser, e cada uma fica na nota da tarefa.
 
 - **Aprovar entrega**: conclui a tarefa e valida no cérebro o que as equipes aprenderam.
 - **Devolver para as equipes**: escreva o que precisa mudar. A tarefa volta ao topo da fila e o gestor refaz o plano com o seu comentário.
+
+Antes de chegar a você, a entrega já passa por até **duas correções automáticas**: se o avaliador reprovar, a equipe que fez o trabalho recebe exatamente o que faltou, corrige e o avaliador confere de novo. O passo aparece como "correção automática" no plano. O que o avaliador apontou entra nos **erros comuns** da equipe no cérebro: as próximas tarefas dela recebem essa lista e o treino cria casos para testar esses erros.
+
+### Quando uma IA responde fora do formato
+
+O app pede a cada IA uma resposta num formato combinado (um pequeno JSON no fim). Se a IA fizer o trabalho mas responder fora desse formato, faltando um campo ou citando uma equipe que não existe, o app mostra para ela o que veio errado e pede só a correção, **sem refazer o trabalho** (até duas vezes). Só depois disso a etapa passa para outra IA. Uma IA que erra o formato com frequência passa a receber um lembrete mais firme nos pedidos, que some quando ela volta a acertar. Tudo aparece em **Acompanhar equipes**.
 - **Tentar de novo de onde parou**: aparece quando uma equipe falhou.
 
 ## Equipes
@@ -175,7 +248,11 @@ As equipes são quem o gestor chama nas solicitações. O app não traz equipes 
 
 1. **Pelos seus objetivos**: no primeiro acesso, ou depois em **Equipes → Adicionar por objetivo**.
 2. **Pelo gestor**: num projeto **Automático**, quando um pedido precisa de uma equipe que não existe, o gestor cria uma sob medida. No **Com aprovação**, ele propõe e você aprova junto com o plano.
-3. **Por você**: em **Nova equipe**, no fim da página.
+3. **Por você**: em **Nova equipe**, no fim da página. Preencha nome e o que faz e clique em **Analisar com o gestor**. Nada é criado antes de você confirmar. O gestor:
+    - confere se já existe uma equipe com o mesmo escopo e, se existir, recomenda **ajustar a existente** em vez de criar outra;
+    - refina o nome e escreve o **prompt comportamental de base** (você pode editar);
+    - escolhe o **caminho na árvore do cérebro**;
+    - diz se vale **treinar antes** (e em que nível) ou se pode começar direto. Os botões são **Criar sem treinar** e **Criar e treinar**.
 
 | Objetivo | Equipes criadas |
 | --- | --- |
@@ -188,16 +265,42 @@ As equipes são quem o gestor chama nas solicitações. O app não traz equipes 
 | Planejamento e organização | Planejamento |
 | Automação e servidores | Infra e automação |
 
-Cada equipe tem uma **IA principal** e uma **reserva**, sempre escolhidas entre as IAs que você marcou para usar. Se você usa só o Gemini, todas as equipes ficam com o Gemini e sem reserva. Se ligar ou desligar uma IA em **IAs**, as equipes que dependiam dela são ajustadas sozinhas; as escolhas que você fez e continuam valendo não mudam. Equipes criadas pelo gestor para um projeto respeitam também as IAs que aquele projeto permite.
+Cada equipe tem uma **IA principal** e uma **reserva**, sempre escolhidas entre as IAs que você marcou para usar. Se você usa só o Claude, todas as equipes ficam com o Claude (e as outras contas dele entram no rodízio quando uma bate o limite). Se ligar ou desligar uma IA em **IAs**, as equipes que dependiam dela são ajustadas sozinhas; as escolhas que você fez e continuam valendo não mudam. Equipes criadas pelo gestor para um projeto respeitam também as IAs que aquele projeto permite.
 
-- **IA principal** e **Reserva**: se a principal falhar ou ficar sem cota, a reserva assume. Se a reserva também falhar, o gestor tenta qualquer outra IA em uso que consiga fazer aquele trabalho.
+- **IA principal** e **Reserva**: se a principal falhar ou ficar sem cota, a reserva assume na hora. Se a reserva também falhar, o gestor tenta qualquer outra IA em uso que consiga fazer aquele trabalho. A reserva é sempre de **outro provedor** quando houver um ligado (ex.: principal Claude, reserva Antigravity ou Antigravity), para um limite ou queda de um provedor não derrubar as duas.
 - **Pedir minha aprovação**: antes de cada etapa dessa equipe, a tarefa para e espera você **Liberar** ou **Pular**.
 - **Ativa**: desligada, o gestor deixa de usar a equipe.
 - **Detalhes**: descrição, agentes internos, instruções fixas da equipe e **Precisa editar arquivos** (assim ela só recebe IAs que alteram o projeto).
 
+### O DNA de cada equipe
+
+Nenhuma equipe nasce só com um título. Toda equipe tem nas instruções um **prompt comportamental de base**: o padrão que ela segue, as regras de trabalho e o formato de entrega. Exemplos:
+
+| Equipe | Padrão de base |
+| --- | --- |
+| Código limpo | Clean Code (Robert C. Martin) e Refactoring (Fowler): nomes significativos, funções pequenas, sem duplicação, tratamento rigoroso de erros |
+| Código | Clean Code, SOLID e testes automatizados |
+| Segurança | OWASP Top 10, OWASP ASVS e menor privilégio |
+| Pesquisa | Fontes avaliadas pelo teste CRAAP, dados confirmados em duas fontes |
+| Debug | Reproduzir, isolar, hipótese, teste, correção (Agans) |
+| Dados | Tidy Data e estatística reprodutível |
+| Infra | Twelve-Factor App e práticas de SRE |
+
+Equipes que o gestor cria, ou que você cria sem escrever instruções, recebem o padrão do assunto automaticamente. Equipes antigas sem instruções receberam o DNA ao atualizar o app; instruções curtas que você tinha escrito ficaram como "Instruções extras". Instruções longas (suas ou vindas de treino) não foram tocadas. Em **Detalhes**, dá para editar o DNA e o **caminho na árvore**.
+
+### Central de skills
+
+Uma **skill** é uma habilidade modular: um checklist, um roteiro, um jeito de fazer que você quer que as equipes sigam. Em **Equipes → Central de skills**:
+
+1. **Nova skill**: nome, **quando usar** e o **conteúdo** (passos, regras, modelos, em markdown).
+2. Em **Quem herda**, marque **Todas as equipes** ou as equipes escolhidas.
+3. **Salvar skill**. Ela fica no cérebro, em `40-skills`, e entra nas instruções das equipes que a herdam já na próxima tarefa.
+
+Em **Equipes → Detalhes**, cada equipe mostra as skills que herda.
+
 Equipes **criadas pelo gestor** aparecem com o nome do projeto para o qual foram criadas. Você pode editar, desligar ou remover como qualquer outra. Toda equipe ganha uma área própria no cérebro.
 
-Em **Acompanhar equipes** você vê a saída de cada equipe enquanto trabalha e pode escrever direto para ela.
+Em **Acompanhar** você vê a saída de cada equipe enquanto trabalha e pode escrever direto para ela.
 
 ## Famílias e treino de equipes
 
@@ -220,12 +323,12 @@ Treinar deixa uma equipe excelente num foco que você escolhe. Quem faz o treino
 
 | Nível | Cópias por rodada | Rodadas (máx.) | Casos de teste | Chamadas (máx.) |
 | --- | --- | --- | --- | --- |
-| Leve | 2 | 2 | 4 | ~23 |
-| Médio | 3 | 3 | 5 | ~58 |
-| Profundo | 4 | 5 | 6 | ~146 |
+| Leve | 2 | 2 | 4 | ~28 |
+| Médio | 3 | 3 | 5 | ~64 |
+| Profundo | 4 | 5 | 6 | ~153 |
 | Personalizado | você escolhe | você escolhe | você escolhe | mostrado na hora |
 
-4. Defina a **meta**: a nota mínima, de 0 a 100, para uma cópia virar a equipe oficial. O padrão é 85.
+4. Defina a **meta da IA principal** (padrão 80): a nota mínima para uma cópia virar a equipe oficial. E a **nota mínima da reserva** (padrão 70).
 5. Escolha a **IA do Treinador** e clique em **Criar casos de teste**.
 6. O Treinador escreve os casos: pedidos como um usuário faria, cada um com os critérios do que uma boa resposta precisa ter. **Revise**: edite, remova, **+ Adicionar caso** ou **Pedir outros casos ao Treinador**.
 7. Clique em **Começar o treino**. Pode sair da tela: ele continua rodando.
@@ -237,7 +340,16 @@ Treinar deixa uma equipe excelente num foco que você escolhe. Quem faz o treino
 - O Treinador dá nota de 0 a 100 por caso e diz o que faltou.
 - A melhor cópia vira a base da rodada seguinte, e o Treinador corrige as falhas dela.
 
+Os casos de teste incluem os **erros que a equipe já cometeu** em tarefas reais (apontados pelo avaliador) e em treinos anteriores, e as cópias são escritas para evitá-los. Se o Treinador responder fora do formato, o app pede a correção a ele; se a IA da equipe falhar num caso, tenta de novo; se uma conta ficar sem cota, passa para outra conta. Sem cota em nenhuma IA, o treino **pausa** e continua sozinho quando a cota renova.
+
 O treino para quando uma cópia atinge a meta ou quando as rodadas acabam. Na tela do treino você vê cada cópia, a nota de cada caso, o que faltou e as instruções completas.
+
+**Prova das IAs.** Depois que a cópia vencedora sai, o treino também avalia as IAs da equipe, não só as instruções:
+
+- A **reserva** responde aos mesmos casos, com as instruções vencedoras, e recebe nota. Ela precisa de pelo menos a nota mínima da reserva (padrão 70). A principal precisa da meta (padrão 80).
+- **Se a reserva tirar nota maior que a principal, ela é promovida**: vira a IA principal e a antiga principal vira a reserva. Acontece sozinho quando o treino é aplicado.
+- Se a reserva não chegar à nota mínima, até duas outras IAs ligadas fazem a prova para ocupar a vaga.
+- A tela do treino mostra a nota de cada IA e quem ficou com cada posto. Em **Equipes**, cada equipe mostra **Desempenho** (a nota de cada IA na última prova) e **Tarefas** (quantas entregas de cada IA o avaliador aprovou ou apontou problema).
 
 **No fim:**
 
@@ -251,7 +363,26 @@ O treino para quando uma cópia atinge a meta ou quando as rodadas acabam. Na te
     - **exemplos-…**: as melhores respostas de cada caso, com a nota, como modelo de qualidade.
   Tudo fica ligado por links e aparece no grafo do **Cérebro**. Como as equipes consultam a própria área antes de cada tarefa, elas passam a usar isso no trabalho de verdade.
 
+**Limites do treino.** Antes de começar, você define:
+
+- **Tempo máximo**: perto do fim, o treino não começa outra rodada. Ele guarda a melhor versão e documenta no cérebro.
+- **Orçamento de tokens**: o consumo é contado a cada chamada. Se o orçamento acabar, o treino encerra e aplica o melhor que conseguiu, desde que seja melhor que a versão atual da equipe.
+- **Confirmações da nota**: a meta não vale por um pico isolado. A cópia vencedora responde aos casos de novo esse número de vezes e precisa ficar na meta em todas. Se oscilar, o treino continua.
+
+Os padrões acompanham o nível (por exemplo, Médio: 60 minutos, 1 confirmação e cerca de 1,5 vez os tokens previstos).
+
+Enquanto um treino roda, um painel pequeno no canto de baixo mostra o andamento em qualquer tela (rodada, cópia respondendo, melhor nota). Clique no nome para abrir o treino, ou em **recolher** para deixar só o cabeçalho. Quando acaba, o resultado fica ali por 30 minutos ou até você fechar.
+
 Se o app fechar no meio, o treino fica **interrompido**. **Continuar de onde parou** refaz só a rodada incompleta.
+
+### Treinar o Treinador
+
+O Treinador também aprende, como um professor sendo formado para ensinar. Em **Equipes → Sistema**, clique em **Treinar o Treinador**.
+
+- O objetivo já vem preenchido: criar casos de teste bons, dar notas justas e coerentes e escrever instruções que corrigem a causa das falhas. Ajuste se quiser.
+- Quem **prepara a prova e corrige** é outra IA, diferente da que o Treinador usa (de preferência a do Avaliador), para ninguém dar nota a si mesmo. Com uma IA só, o treino avisa que ela vai corrigir a si mesma.
+- A prova tem tarefas de ensino: montar casos e critérios para uma equipe, dar nota a respostas de exemplo e reescrever instruções que falharam.
+- O método vencedor vira as instruções do Treinador e passa a guiar **todos os próximos treinos** de equipes: a criação dos casos, das cópias e as notas.
 
 ## Tela livre
 
@@ -263,7 +394,7 @@ Na tela livre você monta o seu time de agentes: cada agente é um terminal real
 2. Preencha:
     - **Nome ou prefixo**: com mais de um, eles ganham um número (Revisor 1, Revisor 2…).
     - **Quantos**: até 12 de uma vez.
-    - **IA**: Claude Code, Gemini, Codex, Ollama, um terminal comum ou outra que você cadastrou.
+    - **IA**: Claude Code, Antigravity, Codex, Ollama, um terminal comum ou outra que você cadastrou.
     - **Área do cérebro**: pasta do vault que o agente deve consultar antes de começar.
     - **Papel**: uma frase do que ele faz. Os outros agentes veem isso.
     - **Máquina**: este computador ou uma máquina remota. Num espaço de projeto remoto, já vem a máquina dele.
@@ -332,6 +463,24 @@ Com a conexão ok, a linha mostra o sistema da máquina e quais IAs existem lá.
 - **Comando `orq` lá**: os agentes remotos usam o `orq` normalmente, por um túnel seguro até o seu app. Para isso, a máquina precisa ter o **Node.js 18 ou mais novo**. Sem Node.js lá, a linha da máquina avisa, e os agentes de lá trabalham sem o `orq`.
 - O cérebro continua neste computador. As equipes remotas recebem o conteúdo da nota da tarefa junto com o pedido.
 
+## Organização do cérebro
+
+### A árvore de caminhos
+
+Todo conhecimento segue uma árvore: **Categoria > Subcategoria > Domínio > Especialidade > Item** (ex.: `Desenvolvimento > Interno > Infraestrutura > Arquitetura`). Cada equipe tem o seu caminho, e o app mantém o **mapa raiz** em `20-areas/_mapa.md`, com todos os ramos, a pasta de cada equipe e as notas de cada uma.
+
+As equipes começam pelo mapa e pelo seu ramo, em vez de procurar às cegas, e passam o caminho para os sub-agentes.
+
+### As três camadas do conhecimento
+
+O que vai para `20-areas` nunca é um caso bruto copiado. Cada nota de conhecimento tem três camadas:
+
+1. **Conceito**: a regra ou o padrão, agnóstico ao caso (o que é e por que existe).
+2. **Método**: o passo a passo para aplicar.
+3. **Exemplos de uso**: links para os casos reais, que ficam em `exemplos/` dentro da área.
+
+Se uma equipe aprendeu algo só de um caso específico, sem uma regra geral, isso fica apenas como exemplo, e a raiz da área continua limpa. Os treinos seguem o mesmo formato: o **padrão de qualidade** da área (critérios = conceito, erros a evitar = método) na raiz, e o resumo do treino e as respostas de referência em `exemplos/`.
+
 ## O cérebro e o comando orq
 
 O cérebro é a pasta `Documentos/Singularize/cerebro`. Você vê tudo dentro do app, na tela **Cérebro**, e também pode abrir essa pasta no Obsidian para ler e editar como qualquer vault.
@@ -398,7 +547,7 @@ O Headroom comprime o que é enviado à IA, para a mesma cota render mais. Na te
 
 1. Clique em **Instalar Headroom**. A versão padrão é leve; **Versão completa** baixa vários GB. O Headroom precisa do Python: se não houver um no computador, o app explica e pergunta antes. Com o seu **sim**, instala o Python (pelo uv, só para o seu usuário, sem senha de administrador) num terminal visível e segue com o Headroom. Sem o Python não é possível usar o Headroom.
 2. Marque **Usar Headroom**. O app liga o proxy junto com ele.
-3. Em **Passar pelo Headroom**, escolha as IAs. Funciona com Claude Code, Codex e CLIs compatíveis; Gemini e Ollama seguem direto.
+3. Em **Passar pelo Headroom**, escolha as IAs. Funciona com Claude Code, Codex e CLIs compatíveis; Antigravity e Ollama seguem direto. Uma conta nova do Claude passa pelo Headroom se a primeira já passa. Se outro programa estiver usando a porta, o app avisa em vez de mandar as IAs para ele.
 4. **Ver economia** mostra quanto foi poupado.
 
 ### Usar pelo celular ou outro computador
@@ -419,14 +568,14 @@ Quando o **Testar** de uma IA falha, o app mostra o motivo, o comando exato, o c
 | --- | --- |
 | Faixa amarela de modo simulado | Nenhuma IA real está pronta. Em **IAs**, clique em **Escolher IAs** e instale ou entre na conta de uma. |
 | IA aparece como não encontrada | Se você instalou por fora, clique em **IAs → Procurar de novo neste computador**. Se ainda não aparecer, use **Instalar**. |
-| Instalação de IA falhou | Leia o fim do terminal da instalação e clique em **Tentar de novo**. No Windows, o Gemini e o Codex precisam do Node.js; o app instala pelo winget se faltar. |
-| Gemini mostra "This client is no longer supported… migrate to the Antigravity" | O Google desativou o Gemini CLI para contas pessoais. Em **IAs → Escolher IAs**, desmarque o Gemini CLI, marque o **Antigravity** e clique em **Entrar na conta**. |
+| Instalação de IA falhou | Leia o fim do terminal da instalação e clique em **Tentar de novo**. No Windows, o Codex precisa do Node.js; o app instala pelo winget se faltar. |
 | Claude pergunta "Do you trust this folder?" | É normal na primeira vez. Escolha **Yes, I trust this folder**. |
 | **Testar** falha | Clique em **Entrar na conta** e faça login de novo. Para Ollama, confira se o modelo foi baixado. |
 | Windows avisa "O Windows protegeu o computador" | Clique em **Mais informações → Executar assim mesmo**. O instalador ainda não é assinado. |
 | Máquina remota pede senha ou falha no teste | Use **Acesso sem senha** uma vez. Se o erro for de endereço ou tempo esgotado, confira o destino, a porta e se a máquina está ligada. |
 | Agente remoto sem o comando `orq` | Instale o Node.js 18+ na máquina remota e clique em **Testar conexão** de novo. |
-| Uma IA aparece "sem cota" | O app tirou ela do rodízio por 1 hora e passou o trabalho para a reserva. **Liberar agora** em **IAs** devolve antes. |
+| Uma IA aparece "sem cota" | O app tirou ela do rodízio até a hora em que a cota renova (ou por 1 hora, se a IA não disse) e passou o trabalho para outra conta ou para a reserva. **Liberar agora** em **IAs** devolve antes. |
+| Tarefa ou treino "pausado" | Todas as IAs que servem ficaram sem cota. Continua sozinho na hora mostrada. Para não esperar, adicione outra conta em **IAs → Configurar → Contas desta IA** e clique em **Tentar agora** na tarefa. |
 | Agente não recebe a mensagem | A mensagem espera o agente ficar livre ou iniciar. Confira se ele está rodando e se há fio ligando os dois. |
 | Agente recusa enviar mensagem | Leia o motivo no terminal dele: mensagem longa, caminho inexistente no cérebro ou falta de fio. |
 | Terminais fecharam | Ao reiniciar o app, os terminais dos agentes fecham. Clique em **Iniciar** em cada um; mensagens pendentes são entregues. |
@@ -446,6 +595,10 @@ Quando o **Testar** de uma IA falha, o app mostra o motivo, o comando exato, o c
 - **Projeto**: uma pasta de trabalho, neste computador ou numa máquina remota.
 - **Família**: grupo de equipes do mesmo assunto; cada uma continua independente.
 - **Treino**: rodadas em que cópias de uma equipe competem em casos de teste até uma atingir a meta.
+- **Prova das IAs**: no fim do treino, a reserva (e outras IAs, se preciso) responde aos mesmos casos; a melhor nota fica como principal.
+- **Nível de modelo**: rápido, padrão ou forte; o gestor escolhe pela dificuldade de cada etapa para gastar menos.
+- **Questionar**: mandar uma pergunta sobre a entrega para uma equipe ou para o gestor, sem a tarefa voltar para a fila.
+- **Comunicação**: grafo 3D, ao vivo, das mensagens entre você, o gestor, as equipes, as IAs, o avaliador e o treinador.
 - **Equipe sob medida**: equipe que o gestor criou para um projeto quando nenhuma existente servia.
 - **Objetivo**: para que você usa o app (programar, pesquisar, escrever…); cada objetivo cria as equipes certas para ele.
 - **Rascunho / validado**: estado de uma nota do cérebro; vira validado quando você aprova.

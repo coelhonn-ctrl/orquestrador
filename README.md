@@ -1,6 +1,6 @@
 # Singularize Orquestrador
 
-Orquestrador geral de IA. Você usa as ferramentas de terminal e assinaturas que já tem (Claude Code, Gemini CLI, Codex, Ollama, OpenCode, qualquer CLI) e decide como elas trabalham: num fluxo com gestor, ou soltas numa tela livre conversando entre si.
+Orquestrador geral de IA. Você usa as ferramentas de terminal e assinaturas que já tem (Claude Code, Antigravity, Codex, Ollama, qualquer CLI) e decide como elas trabalham: num fluxo com gestor, ou soltas numa tela livre conversando entre si.
 
 O app tem dois modos que se completam.
 
@@ -16,7 +16,8 @@ você → fila → GESTOR (a própria API) → supervisores (um por equipe) → 
 - **Equipes**: só gestor e avaliador vêm prontos. As outras nascem dos objetivos escolhidos no primeiro acesso (`objetivos` em `orq.config.json`), do gestor (sob medida, por projeto) ou de você. A IA principal e a reserva de cada uma saem sempre das IAs em uso. Cada uma roda numa IA de terminal; o resultado entra na nota e volta ao gestor como JSON.
 - **Avaliador**: confere a entrega contra os critérios tirados do pedido e pode te perguntar coisas.
 - **Modo por projeto**: **Automático** (o gestor decide e roda), **Com aprovação** (o gestor propõe o plano e espera você) ou **Manual** (sem gestor; você orquestra os agentes na tela livre).
-- **Remanejamento**: cada equipe tem IA principal e reserva. Se uma falhar ou ficar sem cota, a etapa passa para a próxima que consiga fazer aquele trabalho.
+- **Remanejamento**: cada equipe tem IA principal e reserva. Se uma conta ficar sem cota, a próxima conta da mesma IA assume (rodízio) e, se todas acabarem, a próxima IA. Todas sem cota: a tarefa pausa e continua sozinha na hora em que a cota renova (lida da mensagem da IA).
+- **Ajuste automático**: resposta fora do formato → a mesma IA recebe o que veio errado e corrige, sem refazer o trabalho. Avaliador reprovou → a equipe corrige o que faltou (até 2 vezes) antes de chegar a você, e o que faltou vira "erros comuns" da equipe, usados nos próximos pedidos e no treino.
 
 ### 2. Tela livre: agentes interativos que conversam entre si
 
@@ -46,10 +47,10 @@ você → fila → GESTOR (a própria API) → supervisores (um por equipe) → 
 
 App de desktop para **Windows 10/11** e **Linux**, numa janela própria (Electron), sem terminal nem navegador e sem precisar de Node.js.
 
-- **Windows**: `Singularize-Orquestrador-Setup-1.0.0.exe`. Instala só para o usuário, cria atalhos e aparece em Aplicativos para desinstalar.
-- **Linux**: `Singularize-Orquestrador-1.0.0.AppImage`. Dê permissão de execução e abra.
+- **Windows**: `Singularize-Orquestrador-Setup-<versão>.exe`. Instala só para o usuário, cria atalhos e aparece em Aplicativos para desinstalar.
+- **Linux**: `Singularize-Orquestrador-<versão>.AppImage`. Dê permissão de execução e abra.
 
-No primeiro acesso o app pede a **pasta dos projetos** e depois mostra as IAs (Claude Code, Gemini CLI, Codex, Ollama) para você escolher. **Nada é instalado sozinho**: só as IAs marcadas que faltarem, depois que você confirma, num terminal visível dentro do app. Em seguida, **Entrar na conta** abre o login de cada uma.
+No primeiro acesso o app pede a **pasta dos projetos** e depois mostra as IAs (Claude Code, Antigravity, Codex, Ollama) para você escolher. **Nada é instalado sozinho**: só as IAs marcadas que faltarem, depois que você confirma, num terminal visível dentro do app. Assim que cada uma instala, o login dela abre; ao terminar, o app testa e já coloca em uso.
 
 Dados do app: `%APPDATA%\Singularize Orquestrador\dados` (Windows) ou `~/.config/Singularize Orquestrador/dados` (Linux), com um `.env` opcional (`ORQ_TOKEN`, `ORQ_HOST`, `ORQ_PORTA`…). Cérebro e projetos em `Documentos/Singularize/`.
 
@@ -74,12 +75,14 @@ Tela **IAs**. Qualquer CLI entra: escolha o tipo ou "Outro CLI" e informe comand
 
 | Tipo | Comando padrão |
 | --- | --- |
-| Claude Code | `claude -p {prompt} --permission-mode acceptEdits` |
-| Gemini CLI | `gemini -p {prompt}` |
-| Codex CLI | `codex exec {prompt}` |
+| Claude Code | `claude -p {prompt} --permission-mode acceptEdits --allowedTools WebSearch,WebFetch,Read,Glob,Grep` |
+| Antigravity CLI | `agy -p {prompt} --mode accept-edits` |
+| Codex CLI | `codex exec --skip-git-repo-check --full-auto {prompt}` |
 | Ollama | `ollama run {modelo} {prompt}` |
 
-Para uma segunda conta da mesma ferramenta, cadastre outra IA do mesmo tipo com uma variável de ambiente diferente, por exemplo `CLAUDE_CONFIG_DIR=~/.claude-trabalho`. Os valores dessas variáveis ficam só no servidor.
+Várias contas por IA (rodízio): **IAs → Configurar → Contas desta IA → Adicionar conta** com "Perfil separado". O app cria uma pasta de configuração só dela (`CLAUDE_CONFIG_DIR` em `dados/perfis/`), abre o login (`claude auth login` no Claude), testa a conta quando o login termina e ela entra no rodízio. Também dá para adicionar uma conta por chave de API. Os valores das variáveis ficam só no servidor.
+
+O Gemini CLI saiu do app (o Google deixou de oferecê-lo pelo terminal com conta pessoal); cadastros antigos são removidos ao atualizar e os agentes passam para o Antigravity ou o Claude.
 
 Por padrão o Claude Code roda com `--permission-mode acceptEdits` (edita arquivos sem perguntar, mas pede para rodar comandos). Ajuste os argumentos se quiser mais ou menos autonomia.
 
@@ -109,7 +112,7 @@ Tela **IAs → Headroom**:
 
 1. **Instalar Headroom**: tenta `uv tool install`, depois `pipx`, depois um ambiente Python só do app em `.headroom/`. A versão padrão é `headroom-ai[proxy]`; marque "Versão completa" para `headroom-ai[all]`, que inclui o modelo de compressão de texto (PyTorch, vários GB).
 2. **Usar Headroom**: o app sobe `headroom proxy --port 8787` e derruba quando você desliga.
-3. **Passar pelo Headroom**: escolha quais IAs usam o proxy. O app injeta `ANTHROPIC_BASE_URL` e `OPENAI_BASE_URL` só nelas. Gemini CLI e Ollama seguem direto.
+3. **Passar pelo Headroom**: escolha quais IAs usam o proxy. O app injeta `ANTHROPIC_BASE_URL` e `OPENAI_BASE_URL` só nelas. Antigravity e Ollama seguem direto. O app confere o `GET /health` do proxy e não usa a porta se outro programa estiver nela.
 4. **Ver economia** mostra o `headroom savings`.
 
 Se o proxy cair, as IAs voltam a ir direto ao provedor na etapa seguinte.
@@ -143,7 +146,8 @@ Sem eles, tudo fica em `data/estado.json` e os eventos ficam em memória. Com Re
 src/server.js        API HTTP + WebSocket (/eventos)
 src/gestor.js        fila, planejamento, execução das etapas, perguntas, aprovação
 src/adaptadores.js   como cada CLI é chamada; modo simulado
-src/prompts.js       prompts curtos do gestor, supervisores e avaliador
+src/prompts.js       prompts curtos do gestor, supervisores e avaliador, e o formato de resposta de cada etapa
+src/resposta.js      confere as respostas das IAs e pede a correção quando vêm fora do formato
 src/vault.js         notas no formato Obsidian
 src/headroom.js      instalação e proxy do Headroom
 src/agentes.js       agentes em PTY (locais e por SSH), entrega de mensagens, aviso inicial

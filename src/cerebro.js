@@ -72,6 +72,9 @@ export const criarCerebro = (raiz) => {
       if (rel.startsWith('20-areas/')) pontos += 2;
       if (estado === 'validado') pontos += 2;
       if (rel.startsWith('10-tarefas/')) pontos -= 1;
+      // O conhecimento consolidado vem antes; casos de uso depois; como foi adquirido por último.
+      if (/^20-areas\/[^/]+\/exemplos\//.test(rel)) pontos -= 1;
+      if (/^20-areas\/[^/]+\/origem\//.test(rel)) pontos -= 3;
       achados.push({ caminho: rel, absoluto: abs, titulo: titulo || path.basename(rel, '.md'), resumo: linha, estado, pontos });
     }
     return achados.sort((a, b) => b.pontos - a.pontos || a.caminho.localeCompare(b.caminho)).slice(0, limite);
@@ -159,8 +162,14 @@ export const criarCerebro = (raiz) => {
       if (no.area) {
         const hub = hubDeArea(no.area);
         no.equipe = nos.get(hub).equipe;
-        nos.get(hub).notas += 1;
-        ligar(rel, hub, 'area');
+        // Três caminhos: só o conhecimento consolidado (raiz da área) liga direto na equipe.
+        // Casos de uso (exemplos/) e como foi adquirido (origem/) só se ligam pelos links da nota de conhecimento.
+        const partes = rel.split('/');
+        no.camada = partes.length === 3 ? 'conhecimento' : partes[2] === 'origem' ? 'origem' : 'caso';
+        if (no.camada === 'conhecimento') {
+          nos.get(hub).notas += 1;
+          ligar(rel, hub, 'area');
+        }
       }
       for (const m of conteudo.matchAll(/!?\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]/g)) {
         const alvo = porNome.get(normalizar(m[1].trim().replace(/\.md$/, '')));

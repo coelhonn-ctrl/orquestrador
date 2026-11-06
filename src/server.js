@@ -9,8 +9,14 @@ import { WebSocketServer } from 'ws';
 import { cfg, expandirCaminho } from './config.js';
 import { criarStore } from './store/index.js';
 import { criarBarramento } from './eventos.js';
-import { criarVault } from './vault.js';
+import { criarVault, migrarVaultCamadas } from './vault.js';
 import { criarGestor } from './gestor.js';
+import { criarComunicacao } from './comunicacao.js';
+import { criarConsumo } from './consumo.js';
+import { dnaDe, temDNA } from './dna.js';
+import { criarSkills } from './skills.js';
+import { PERFIL_ENV, pastaPerfil, comConta, contasDe } from './contas.js';
+import { definirSkills } from './prompts.js';
 import { TIPOS, detectar, comandoDe, executar, explicarFalha, montarArgs, definirRegistro, falhaPermanente } from './adaptadores.js';
 import { criarDiagnostico } from './diagnostico.js';
 import { criarEquipes } from './equipes.js';
@@ -18,6 +24,7 @@ import { criarTreino, NIVEIS, estimar } from './treino.js';
 import { criarBackup } from './backup.js';
 import { iaPublica } from './publico.js';
 import { criarHeadroom } from './headroom.js';
+import { pararTodos as pararTestes } from './teste-local.js';
 import { criarCerebro } from './cerebro.js';
 import { criarAtividade } from './atividade.js';
 import { criarAgentes } from './agentes.js';
@@ -25,24 +32,50 @@ import { registrarRotasAgentes } from './rotas-agentes.js';
 import { atualizarPath } from './caminhos.js';
 import { testarMaquina, argsSsh, comandoRemoto, comandoSsh, chavePublicaLocal, aspas } from './maquinas.js';
 import { PLANOS, comandoDeInstalacao, DEPENDENCIAS, comandoDeDependencia } from './instalacao-ias.js';
-import { resolverExecutavel, esquecerResolvidos, envDaIA } from './adaptadores.js';
+import { resolverExecutavel, esquecerResolvidos, envDaIA, definirConsumo, respostaDeCota, fimDaCota, COMANDOS_PADRAO, definirComandosLiberados } from './adaptadores.js';
 
 const store = await criarStore(cfg);
 const bus = await criarBarramento(cfg);
-const vault = criarVault(cfg.vault, cfg.padrao.areas);
+const vault = criarVault(cfg.vault, cfg.padrao.areas, (uso) => bus?.emitir({ tipo: 'cerebro.uso', ...uso, em: new Date().toISOString() }));
 const headroom = criarHeadroom({ store, bus, raiz: cfg.raiz });
-const gestor = criarGestor({ cfg, store, bus, vault, headroom });
+const comunicacao = criarComunicacao({ bus, dados: cfg.dados });
+const consumo = criarConsumo({ dados: cfg.dados });
+const skills = criarSkills({ vault, bus });
+definirSkills((equipeId) => skills.paraPrompt(equipeId));
+definirConsumo(consumo.registrar);
+const gestor = criarGestor({ cfg, store, bus, vault, headroom, comunicar: comunicacao.comunicar });
 const cerebro = criarCerebro(cfg.vault);
 const atividade = criarAtividade({ dir: cfg.dados, bus });
-const agentes = criarAgentes({ cfg, store, bus, cerebro, headroom, atividade });
+const agentes = criarAgentes({ cfg, store, bus, cerebro, headroom, atividade, comunicar: comunicacao.comunicar });
 const equipes = criarEquipes({ store, bus, vault, padrao: cfg.padrao });
 const diagnostico = criarDiagnostico({ cfg, store, headroom });
-const treino = criarTreino({ cfg, store, bus, vault });
+const treino = criarTreino({ cfg, store, bus, vault, comunicar: comunicacao.comunicar });
 const VERSAO = JSON.parse(fs.readFileSync(path.join(cfg.raiz, 'package.json'), 'utf8')).version;
 const backup = criarBackup({ cfg, store, bus, vault, versao: VERSAO });
 definirRegistro(diagnostico.registrarExecucao);
 
 // ---------------------------------------------------------------- semente e detecção
+
+// IAs que saíram do app (o Gemini CLI foi desativado pelo Google para uso pelo terminal).
+// Remove o cadastro, troca a IA dos agentes que usavam e tira dos projetos; as equipes se ajustam depois.
+const TIPOS_REMOVIDOS = ['gemini'];
+const migrarObsoletas = async () => {
+  const velhas = (await store.listar('ias')).filter((i) => TIPOS_REMOVIDOS.includes(i.tipo));
+  if (!velhas.length) return;
+  const ids = new Set(velhas.map((i) => i.id));
+  const ias = (await store.listar('ias')).filter((i) => !ids.has(i.id));
+  const substituta = ias.find((i) => i.tipo === 'antigravity') ?? ias.find((i) => i.tipo === 'claude') ?? ias.find((i) => i.tipo !== 'simulado' && i.tipo !== 'shell');
+  for (const a of await store.listar('agentes')) {
+    if (!ids.has(a.iaId) || !substituta) continue;
+    await store.salvar('agentes', { ...a, iaId: substituta.id });
+  }
+  for (const p of await store.listar('projetos')) {
+    if (!(p.ias ?? []).some((id) => ids.has(id))) continue;
+    await store.salvar('projetos', { ...p, ias: p.ias.filter((id) => !ids.has(id)) });
+  }
+  for (const id of ids) await store.remover('ias', id);
+  console.log(`[ias] Removidas do app: ${velhas.map((i) => i.nome).join(', ')}${substituta ? ` (agentes passaram para ${substituta.nome})` : ''}.`);
+};
 
 const semear = async () => {
   // IAs padrão que ainda não existem (inclusive as que chegaram numa versão nova do app).
@@ -79,12 +112,27 @@ const detectarIAs = async () => {
 
 // Antes de qualquer migração desta versão, guarda o estado como estava.
 await backup.aoIniciar();
+await migrarObsoletas();
 await semear();
 await detectarIAs();
 // Só gestor e avaliador vêm prontos; as outras equipes nascem dos objetivos ou do gestor.
 await equipes.garantirFixas();
 await equipes.ajustar();
 await equipes.completarFamilias();
+await equipes.garantirDNA();
+// Mapa raiz do cérebro: refeito ao abrir e sempre que uma equipe muda ou algo é aprendido.
+let esperaMapa = null;
+const refazerMapa = () => {
+  clearTimeout(esperaMapa);
+  esperaMapa = setTimeout(async () => vault.atualizarMapa(await store.listar('equipes')), 1500);
+};
+try {
+  migrarVaultCamadas(cfg.vault);
+} catch (e) {
+  console.error('[vault] migração das camadas:', e.message);
+}
+vault.atualizarMapa(await store.listar('equipes'));
+bus.aoEvento((e) => ['equipe', 'equipe.removida', 'tarefa', 'treino'].includes(e.tipo) && refazerMapa());
 await treino.aoIniciar();
 
 // O cérebro mudou (uma equipe aprendeu, uma tarefa andou, você editou no Obsidian): avisa a tela do grafo.
@@ -148,10 +196,18 @@ app.disable('x-powered-by');
 app.use(express.json({ limit: '400mb' }));
 // Sem cache: depois de atualizar o app, a tela sempre carrega a versão nova.
 app.use(express.static(path.join(cfg.raiz, 'public'), { setHeaders: (res) => res.set('Cache-Control', 'no-cache') }));
+// Teste de entrega estática (site HTML, imagens, documentos): serve a pasta do projeto daquela tarefa, só leitura.
+app.use('/teste/:id', async (req, res, next) => {
+  const t = await store.obter('tarefas', req.params.id).catch(() => null);
+  if (!t?.teste?.pasta || !['estatico', 'arquivos'].includes(t.teste.tipo)) return res.status(404).send('Teste não encontrado.');
+  express.static(t.teste.pasta, { dotfiles: 'deny', index: ['index.html'] })(req, res, next);
+});
 app.get('/icone.png', (_req, res) => res.sendFile(path.join(cfg.raiz, 'instalador', 'icone.png')));
 app.get('/manual.md', (_req, res) => res.type('text/markdown; charset=utf-8').sendFile(path.join(cfg.raiz, 'MANUAL.md')));
 app.use('/vendor/xterm', express.static(path.join(cfg.raiz, 'node_modules', '@xterm', 'xterm')));
 app.use('/vendor/xterm-fit', express.static(path.join(cfg.raiz, 'node_modules', '@xterm', 'addon-fit')));
+app.use('/vendor/3d', express.static(path.join(cfg.raiz, 'node_modules', '3d-force-graph', 'dist')));
+// three.js (vem com o 3d-force-graph): o universo do Cérebro usa direto, com shaders próprios.
 
 app.use('/api', (req, _res, next) => (tokenValido(req.get('x-orq-token') ?? req.query.token) ? next() : next(erro(401, 'Token inválido.'))));
 
@@ -169,11 +225,14 @@ app.get(
     headroom: await headroom.estado(),
     comecar: (await store.obter('ajustes', 'comecar')) ?? { feito: false },
     treinos: await store.listar('treinos'),
+    skills: skills.listar().map(({ conteudo, ...s }) => ({ ...s, tamanho: conteudo.length })),
+    niveisModelo: { automatico: (await store.obter('ajustes', 'niveis'))?.automatico !== false },
+    comandosLiberados: (await store.obter('ajustes', 'comandos'))?.lista ?? COMANDOS_PADRAO,
     niveisTreino: Object.fromEntries(Object.entries(NIVEIS).map(([k, v]) => [k, { ...v, ...estimar(v) }])),
     objetivos: cfg.padrao.objetivos.map((o) => ({ id: o.id, nome: o.nome, desc: o.desc, equipes: o.equipes.map((e) => e.nome) })),
     geral: { pastaProjetos: cfg.pastaProjetos, ...((await store.obter('ajustes', 'geral')) ?? {}), separador: path.sep, casa: os.homedir() },
     planos: Object.fromEntries(Object.entries(PLANOS).map(([k, v]) => [k, { descricao: v.descricao, comando: comandoDeInstalacao(k).texto, entrar: { rotulo: v.entrar.rotulo, dica: v.entrar.dica } }])),
-    sistema: { versao: VERSAO, dados: cfg.dados, desktop: !!process.env.ORQ_DESKTOP, plataforma: process.platform, simular: cfg.simular, maxAtivas: cfg.maxAtivas, vault: cfg.vault, store: store.tipo, tipos: Object.fromEntries(Object.entries(TIPOS).map(([k, v]) => [k, { rotulo: v.rotulo, comando: v.comando ?? '', args: v.args, interativo: v.interativo ?? [], capacidades: v.capacidades, modelo: v.modelo ?? '' }])) },
+    sistema: { versao: VERSAO, dados: cfg.dados, desktop: !!process.env.ORQ_DESKTOP, plataforma: process.platform, simular: cfg.simular, maxAtivas: cfg.maxAtivas, vault: cfg.vault, store: store.tipo, tipos: Object.fromEntries(Object.entries(TIPOS).map(([k, v]) => [k, { rotulo: v.rotulo, comando: v.comando ?? '', args: v.args, interativo: v.interativo ?? [], capacidades: v.capacidades, modelo: v.modelo ?? '', niveis: v.niveis ?? null }])) },
   })),
 );
 
@@ -239,7 +298,13 @@ app.post(
     if (projeto.modo === 'manual') throw erro(409, 'Este projeto é manual: orquestre os agentes na tela livre.');
     const seq = await store.proximaSequencia('tarefa');
     const id = `T-${String(seq).padStart(3, '0')}`;
-    const fotos = (Array.isArray(req.body.fotos) ? req.body.fotos : []).slice(0, 10).map((f, i) => vault.salvarFoto(id, i, f?.dados)).filter(Boolean);
+    // Anexos: qualquer arquivo (até 20 por tarefa, 50 MB cada). Imagens também entram em "fotos" para a galeria.
+    const arquivos = (Array.isArray(req.body.arquivos) ? req.body.arquivos : []).slice(0, 20).map((f, i) => vault.salvarArquivo(id, i, f)).filter(Boolean);
+    const fotos = [
+      ...arquivos.filter((a) => /^image\/(png|jpe?g|gif|webp)/.test(a.tipo)).map((a) => a.arquivo),
+      ...(Array.isArray(req.body.fotos) ? req.body.fotos : []).slice(0, 10).map((f, i) => vault.salvarFoto(id, arquivos.length + i, f?.dados)).filter(Boolean),
+    ];
+    if ((req.body.arquivos?.length ?? 0) > arquivos.length) console.warn(`[tarefas] ${id}: ${req.body.arquivos.length - arquivos.length} anexo(s) recusado(s) (acima de 50 MB ou inválido)`);
     const tarefas = await store.listar('tarefas');
     const tarefa = {
       id,
@@ -247,6 +312,7 @@ app.post(
       titulo: campo(textoPedido.split('\n')[0], 90),
       texto: textoPedido,
       fotos,
+      arquivos,
       origem: campo(req.body.origem, 120) || null,
       estado: 'fila',
       posicao: Math.max(0, ...tarefas.map((t) => t.posicao ?? 0)) + 1,
@@ -280,6 +346,40 @@ app.post(
 app.get('/api/tarefas/:id/nota', rota(async (req) => ({ nota: vault.lerNota(await tarefaEm(req.params.id)), caminho: vault.caminhoNota({ id: req.params.id }) })));
 app.post('/api/tarefas/:id/responder', rota((req) => gestor.responder(req.params.id, campo(req.body.resposta, 4000) || 'Ok')));
 app.post('/api/tarefas/:id/aprovar', rota((req) => gestor.aprovar(req.params.id)));
+app.post('/api/tarefas/:id/questionar', rota((req) => gestor.questionar(req.params.id, { para: campo(req.body.para, 120), texto: campo(req.body.texto, 4000) })));
+// Central de skills (40-skills no cérebro).
+app.get('/api/skills', rota(() => skills.listar()));
+app.post('/api/skills', rota((req) => skills.gravar({ ...req.body, id: null })));
+app.put('/api/skills/:id', rota((req) => skills.gravar({ ...req.body, id: req.params.id })));
+app.delete('/api/skills/:id', rota((req) => skills.remover(req.params.id)));
+app.get('/api/consumo', rota((req) => consumo.resumo({ dias: Math.min(90, Math.max(1, Number(req.query.dias) || 7)), tarefaId: campo(req.query.tarefaId, 40) || undefined })));
+app.put(
+  '/api/ajustes/comandos',
+  rota(async (req) => {
+    const lista = String(req.body?.texto ?? '')
+      .split(/[,\n]/)
+      .map((c) => c.trim())
+      .filter(Boolean)
+      .slice(0, 80);
+    await store.salvar('ajustes', { id: 'comandos', lista });
+    definirComandosLiberados(lista);
+    bus.emitir({ tipo: 'recarregar' });
+    return { lista };
+  }),
+);
+app.put(
+  '/api/ajustes/niveis',
+  rota(async (req) => {
+    const r = { id: 'niveis', automatico: req.body.automatico !== false };
+    await store.salvar('ajustes', r);
+    bus.emitir({ tipo: 'recarregar' });
+    return r;
+  }),
+);
+app.post('/api/tarefas/:id/corrigir', rota((req) => gestor.corrigir(req.params.id)));
+app.post('/api/tarefas/:id/teste', rota((req) => gestor.testar(req.params.id)));
+app.post('/api/tarefas/:id/teste/parar', rota((req) => gestor.pararTeste(req.params.id)));
+app.post('/api/tarefas/:id/teste/corrigir', rota((req) => gestor.corrigirTeste(req.params.id)));
 app.post('/api/tarefas/:id/devolver', rota((req) => gestor.devolver(req.params.id, campo(req.body.motivo, 4000))));
 app.post('/api/tarefas/:id/cancelar', rota((req) => gestor.cancelar(req.params.id)));
 app.post('/api/tarefas/:id/retomar', rota((req) => gestor.retomar(req.params.id)));
@@ -331,12 +431,13 @@ app.post(
       area: idDe(req.body.area || nome),
       requer: req.body.requer === 'editar' ? 'editar' : null,
       agentes: campo(req.body.agentes, 200),
-      instrucoes: campo(req.body.instrucoes, 4000),
+      ...comDNA({ nome, desc: campo(req.body.desc, 300), foco: campo(req.body.foco, 600), familia: campo(req.body.familia, 60), instrucoes: campo(req.body.instrucoes, 8000), caminho: lerCaminho(req.body.caminho) }),
       familia: campo(req.body.familia, 60),
       foco: campo(req.body.foco, 600),
       contextos: listaContextos(req.body.contextos),
       aprovacao: !!req.body.aprovacao,
       ativa: true,
+      treinoRecomendado: req.body.treinoRecomendado ?? null,
     }).then(async (e) => {
       // Sem IA escolhida (ou escolhida uma fora de uso), assume uma das IAs em uso.
       await equipes.ajustar();
@@ -345,12 +446,15 @@ app.post(
   }),
 );
 
+app.post('/api/equipes/analisar', rota((req) => gestor.analisarEquipe(req.body ?? {})));
+
 app.patch(
   '/api/equipes/:id',
   rota(async (req) => {
     const e = await store.obter('equipes', req.params.id);
     if (!e) throw erro(404, 'Equipe não encontrada.');
-    for (const k of ['nome', 'desc', 'principal', 'reserva', 'agentes', 'instrucoes', 'familia', 'foco']) if (req.body[k] !== undefined) e[k] = campo(req.body[k], k === 'instrucoes' ? 4000 : k === 'foco' ? 600 : 300);
+    for (const k of ['nome', 'desc', 'principal', 'reserva', 'agentes', 'instrucoes', 'familia', 'foco']) if (req.body[k] !== undefined) e[k] = campo(req.body[k], k === 'instrucoes' ? 8000 : k === 'foco' ? 600 : 300);
+    if (req.body.caminho !== undefined) e.caminho = lerCaminho(req.body.caminho);
     if (req.body.contextos !== undefined) e.contextos = listaContextos(req.body.contextos);
     for (const k of ['aprovacao', 'ativa']) if (req.body[k] !== undefined) e[k] = !!req.body[k];
     if (req.body.requer !== undefined) e.requer = req.body.requer === 'editar' ? 'editar' : null;
@@ -372,10 +476,20 @@ app.delete(
 );
 
 // IAs (contas e ferramentas de terminal)
+// Caminho na árvore do cérebro: "Desenvolvimento > Interno > Engenharia > Código" ou lista.
+const lerCaminho = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/\s*[>›\/]\s*/)).map((x) => campo(x, 60)).filter(Boolean).slice(0, 5);
+// Nenhuma equipe nasce sem DNA: instruções curtas ganham o prompt comportamental de base.
+const comDNA = ({ nome, desc, foco, familia, instrucoes, caminho }) => {
+  const dna = dnaDe({ nome, desc, foco, familia, caminho });
+  return { instrucoes: temDNA(instrucoes) ? instrucoes : [dna.instrucoes, instrucoes].filter(Boolean).join('\n\nInstruções extras:\n'), caminho: dna.caminho };
+};
+
 const aplicarIA = (ia, body) => {
   if (body.nome !== undefined) ia.nome = campo(body.nome, 60) || ia.nome;
   if (body.comando !== undefined) ia.comando = campo(body.comando, 200);
   if (body.modelo !== undefined) ia.modelo = campo(body.modelo, 120);
+  // Modelo de cada nível (rápido, padrão, forte). Vazio = o padrão do tipo.
+  if (body.niveis && typeof body.niveis === 'object') ia.niveis = Object.fromEntries(['rapido', 'padrao', 'forte'].map((n) => [n, body.niveis[n] === undefined ? ia.niveis?.[n] : campo(body.niveis[n], 80)]).filter(([, v]) => v !== undefined));
   if (body.args !== undefined) ia.args = Array.isArray(body.args) ? body.args.map(String) : campo(body.args, 1000).split(/\s+/).filter(Boolean);
   if (body.argsInterativo !== undefined) ia.argsInterativo = Array.isArray(body.argsInterativo) ? body.argsInterativo.map(String) : campo(body.argsInterativo, 1000).split(/\s+/).filter(Boolean);
   if (body.env !== undefined) ia.env = parseEnv(body.env, ia.env);
@@ -384,7 +498,11 @@ const aplicarIA = (ia, body) => {
     delete ia.problema;
   }
   if (body.capacidades) ia.capacidades = { arquivos: !!body.capacidades.arquivos, editar: !!body.capacidades.editar };
-  if (body.liberarCota) ia.limiteAte = null;
+  if (body.liberarCota) {
+    ia.limiteAte = null;
+    if (ia.contaPrincipal) ia.contaPrincipal.limiteAte = null;
+    ia.contas = (ia.contas ?? []).map((c) => ({ ...c, limiteAte: null }));
+  }
   return ia;
 };
 
@@ -435,41 +553,56 @@ app.delete(
 
 app.post('/api/ias/detectar', rota(async () => (await detectarIAs()).map(iaPublica)));
 
-app.post(
-  '/api/ias/:id/testar',
-  rota(async (req) => {
-    const ia = await store.obter('ias', req.params.id);
-    if (!ia) throw erro(404, 'IA não encontrada.');
-    const inicio = Date.now();
-    atualizarPath();
-    esquecerResolvidos();
-    const prompt = 'Responda apenas com o JSON {"status":"ok"}';
-    const alvo = resolverExecutavel(comandoDe(ia), montarArgs(ia, prompt));
-    const r = await executar(ia, prompt, { cwd: os.homedir(), timeoutMs: 120_000, velocidade: 4, envExtra: await headroom.envPara(ia) });
-    const ok = r.codigo === 0;
-    const detalhe = {
-      ok,
-      ms: Date.now() - inicio,
-      motivo: ok ? '' : explicarFalha(ia, r),
-      codigo: r.codigo,
-      tempoEsgotado: !!r.timeout,
-      comando: [alvo.comando, ...alvo.args].map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' '),
-      pasta: os.homedir(),
-      saida: r.saida.trim().slice(-4000),
-      erro: r.erro.trim().slice(-4000),
-    };
-    if (!ok) console.error(`[testar ${ia.id}]`, JSON.stringify(detalhe));
-    // O teste decide se a IA está com problema: passou, volta a ser usada; falha permanente, fica marcada.
-    const atual = await store.obter('ias', ia.id);
-    if (atual) {
-      if (ok) delete atual.problema;
-      else if (falhaPermanente(detalhe.motivo)) atual.problema = { motivo: detalhe.motivo, em: new Date().toISOString() };
-      await store.salvar('ias', atual);
-      bus.emitir({ tipo: 'ia', ia: iaPublica(atual) });
-    }
-    return detalhe;
-  }),
-);
+// Teste curto de uma IA (ou de uma conta do rodízio dela). Passou: volta a ser usada.
+// Falha permanente (login, comando sumiu): fica marcada. Sem cota: fica de fora até a hora em que a cota volta.
+const PEDIDO_TESTE = 'Responda apenas com o JSON {"status":"ok"}';
+const testarIA = async (id, contaId = null) => {
+  const iaBase = await store.obter('ias', id);
+  if (!iaBase) throw erro(404, 'IA não encontrada.');
+  const contaTeste = contaId ? contasDe(iaBase).find((c) => c.id === contaId) : null;
+  const ia = contaTeste ? comConta(iaBase, contaTeste) : iaBase;
+  const inicio = Date.now();
+  atualizarPath();
+  esquecerResolvidos();
+  const alvo = resolverExecutavel(comandoDe(ia), montarArgs(ia, PEDIDO_TESTE));
+  const r = await executar(ia, PEDIDO_TESTE, { cwd: os.homedir(), timeoutMs: 120_000, velocidade: 4, envExtra: await headroom.envPara(ia) });
+  const ok = r.codigo === 0;
+  const detalhe = {
+    ok,
+    ms: Date.now() - inicio,
+    motivo: ok ? '' : explicarFalha(ia, r),
+    codigo: r.codigo,
+    tempoEsgotado: !!r.timeout,
+    comando: [alvo.comando, ...alvo.args].map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' '),
+    pasta: os.homedir(),
+    saida: r.saida.trim().slice(-4000),
+    erro: r.erro.trim().slice(-4000),
+  };
+  if (!ok) console.error(`[testar ${ia.id}${contaTeste ? `/${contaTeste.id}` : ''}]`, JSON.stringify(detalhe));
+  const cota = !ok && respostaDeCota(r) ? fimDaCota(`${r.saida}\n${r.erro}`, cfg.pausaLimiteMs) : null;
+  const atual = await store.obter('ias', iaBase.id);
+  if (atual && contaTeste && contaTeste.id !== 'principal') {
+    atual.contas = (atual.contas ?? []).map((c) =>
+      c.id === contaTeste.id
+        ? { ...c, problema: ok ? null : falhaPermanente(detalhe.motivo) ? { motivo: detalhe.motivo, em: new Date().toISOString() } : c.problema, limiteAte: ok ? null : cota ?? c.limiteAte, testada: new Date().toISOString(), ok }
+        : c,
+    );
+    await store.salvar('ias', atual);
+    bus.emitir({ tipo: 'ia', ia: iaPublica(atual) });
+  } else if (atual) {
+    if (ok) {
+      delete atual.problema;
+      atual.contaPrincipal = { ...(atual.contaPrincipal ?? {}), limiteAte: null, problema: null };
+    } else if (falhaPermanente(detalhe.motivo)) atual.problema = { motivo: detalhe.motivo, em: new Date().toISOString() };
+    else if (cota) atual.contaPrincipal = { ...(atual.contaPrincipal ?? {}), limiteAte: cota };
+    await store.salvar('ias', atual);
+    bus.emitir({ tipo: 'ia', ia: iaPublica(atual) });
+  }
+  return detalhe;
+};
+
+// ?conta=<id>: testa uma conta específica do rodízio.
+app.post('/api/ias/:id/testar', rota((req) => testarIA(req.params.id, req.query.conta || null)));
 
 // Headroom (compressão de contexto)
 app.get('/api/headroom', rota(() => headroom.estado()));
@@ -566,14 +699,22 @@ const terminalDeIA = async (req, modo) => {
   else {
     atualizarPath();
     esquecerResolvidos();
+    // Comando próprio (ex.: um "claude" de outra pasta) entra na conta com os mesmos argumentos do plano.
     const args = plano.entrar.args.map((a) => a.replace('{modelo}', ia.modelo || TIPOS[ia.tipo]?.modelo || ''));
     alvo = resolverExecutavel(ia.comando || plano.entrar.comando, args);
   }
-  agentes.avulso(sessao, alvo.comando, alvo.args, { env: envDaIA(ia) }).then(async (codigo) => {
+  // ?conta=<id>: entra na conta do pool (a pasta de perfil ou a chave dela).
+  const conta = req.query?.conta ? contasDe(ia).find((c) => c.id === req.query.conta) : null;
+  const sessaoReal = conta ? `${sessao}-${conta.id}` : sessao;
+  agentes.avulso(sessaoReal, alvo.comando, alvo.args, { env: envDaIA(conta ? comConta(ia, conta) : ia) }).then(async (codigo) => {
     // Depois de instalar ou entrar na conta, a IA ganha outra chance.
     const depois = await store.obter('ias', ia.id);
-    if (depois?.problema) {
+    if (depois?.problema && !conta) {
       delete depois.problema;
+      await store.salvar('ias', depois);
+    }
+    if (depois && conta && conta.id !== 'principal') {
+      depois.contas = (depois.contas ?? []).map((c) => (c.id === conta.id ? { ...c, problema: null } : c));
       await store.salvar('ias', depois);
     }
     await detectarIAs();
@@ -586,12 +727,87 @@ const terminalDeIA = async (req, modo) => {
       }
       await equipes.ajustar();
     }
-    bus.emitir({ tipo: 'avulso.fim', sessao, ia: ia.id, modo, codigo });
+    bus.emitir({ tipo: 'avulso.fim', sessao: sessaoReal, ia: ia.id, modo, codigo });
+    // Depois de entrar na conta: testa sozinho essa conta e, se respondeu, ela já entra em uso.
+    if (modo === 'entrar' && ia.tipo !== 'ollama') {
+      const teste = await testarIA(ia.id, conta?.id ?? null).catch((e) => ({ ok: false, motivo: e.message }));
+      const atual = await store.obter('ias', ia.id);
+      if (teste.ok && atual && !atual.ativa) {
+        atual.ativa = true;
+        await store.salvar('ias', atual);
+        bus.emitir({ tipo: 'ia', ia: iaPublica(atual) });
+        await equipes.ajustar();
+      }
+      bus.emitir({ tipo: 'ia.teste', ia: ia.id, nome: conta && conta.id !== 'principal' ? `${ia.nome} (${conta.nome})` : ia.nome, ok: teste.ok, motivo: teste.motivo });
+    }
   });
-  return { sessao, comando: alvo.texto ?? [plano.entrar.comando, ...plano.entrar.args].join(' ') };
+  return { sessao: sessaoReal, comando: alvo.texto ?? [plano.entrar.comando, ...plano.entrar.args].join(' ') };
 };
+
+// Pool de contas de uma IA. Cada conta é uma chave de API ou uma pasta de perfil com o login dela.
+const contaDaIA = async (req) => {
+  const ia = await store.obter('ias', req.params.id);
+  if (!ia) throw erro(404, 'IA não encontrada.');
+  return ia;
+};
+const salvarContas = async (ia) => {
+  await store.salvar('ias', ia);
+  const pub = iaPublica(ia);
+  bus.emitir({ tipo: 'ia', ia: pub });
+  return pub;
+};
+app.post(
+  '/api/ias/:id/contas',
+  rota(async (req) => {
+    const ia = await contaDaIA(req);
+    const id = `c${Date.now().toString(36)}`;
+    const nome = campo(req.body.nome, 60) || `Conta ${(ia.contas?.length ?? 0) + 2}`;
+    let env = parseEnv(req.body.env);
+    // Perfil separado: uma pasta só desta conta, onde a ferramenta guarda o login.
+    if (req.body.perfil && PERFIL_ENV[ia.tipo]) env = { ...PERFIL_ENV[ia.tipo](pastaPerfil(cfg.dados, ia.id, id)), ...env };
+    if (!Object.keys(env).length) throw erro(400, 'Informe a chave da conta (ex.: ANTHROPIC_API_KEY=...) ou marque "Perfil separado" para entrar com outro login.');
+    ia.contas = [...(ia.contas ?? []), { id, nome, env, criada: new Date().toISOString(), perfil: !!req.body.perfil }];
+    const pub = await salvarContas(ia);
+    // Conta com perfil separado: já abre o login dela (o app testa sozinho quando o login termina).
+    if (req.body.perfil && PLANOS[ia.tipo]?.entrar) return { ...pub, login: await terminalDeIA({ params: { id: ia.id }, query: { conta: id } }, 'entrar') };
+    return pub;
+  }),
+);
+app.patch(
+  '/api/ias/:id/contas/:conta',
+  rota(async (req) => {
+    const ia = await contaDaIA(req);
+    // Uma conta liberada devolve a IA ao jogo.
+    if (req.body.liberar) ia.limiteAte = null;
+    if (req.params.conta === 'principal') {
+      ia.contaPrincipal = { ...(ia.contaPrincipal ?? {}), ...(req.body.desligada !== undefined ? { desligada: !!req.body.desligada } : {}), ...(req.body.liberar ? { limiteAte: null, problema: null } : {}) };
+      return salvarContas(ia);
+    }
+    ia.contas = (ia.contas ?? []).map((c) =>
+      c.id !== req.params.conta
+        ? c
+        : {
+            ...c,
+            ...(req.body.nome !== undefined ? { nome: campo(req.body.nome, 60) || c.nome } : {}),
+            ...(req.body.env !== undefined ? { env: { ...parseEnv(req.body.env, c.env), ...(c.perfil ? Object.fromEntries(Object.entries(c.env).filter(([k]) => ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'HOME', 'USERPROFILE'].includes(k))) : {}) } } : {}),
+            ...(req.body.desligada !== undefined ? { desligada: !!req.body.desligada } : {}),
+            ...(req.body.liberar ? { limiteAte: null, problema: null } : {}),
+          },
+    );
+    return salvarContas(ia);
+  }),
+);
+app.delete(
+  '/api/ias/:id/contas/:conta',
+  rota(async (req) => {
+    const ia = await contaDaIA(req);
+    ia.contas = (ia.contas ?? []).filter((c) => c.id !== req.params.conta);
+    return salvarContas(ia);
+  }),
+);
 app.post('/api/ias/:id/instalar', rota((req) => terminalDeIA(req, 'instalar')));
 // Treinamento de equipes
+app.get('/api/comunicacao', rota((req) => comunicacao.listar(req.query)));
 app.post('/api/equipes/:id/treinos', rota((req) => treino.novo(req.params.id, req.body ?? {})));
 app.post('/api/equipes/:id/desfazer-treino', rota((req) => treino.desfazer(req.params.id)));
 app.put('/api/treinos/:id/casos', rota((req) => treino.editarCasos(req.params.id, req.body?.casos)));
@@ -628,7 +844,7 @@ app.post(
     if (!ia) throw erro(404, 'IA não encontrada.');
     atualizarPath();
     esquecerResolvidos();
-    const alvo = resolverExecutavel(comandoDe(ia), montarArgs(ia, 'Responda apenas com o JSON {"status":"ok"}'));
+    const alvo = resolverExecutavel(comandoDe(ia), montarArgs(ia, PEDIDO_TESTE));
     const sessao = `teste-${ia.id}`;
     agentes.avulso(sessao, alvo.comando, alvo.args, { cwd: os.homedir(), env: { ...envDaIA(ia), ...(await headroom.envPara(ia)) } }).then((codigo) => bus.emitir({ tipo: 'avulso.fim', sessao, ia: ia.id, modo: 'teste', codigo }));
     return { sessao, comando: [alvo.comando, ...alvo.args].join(' ') };
@@ -815,6 +1031,7 @@ servidor.listen(cfg.porta, cfg.host, () => {
     spawn(cmd, args, { stdio: 'ignore', detached: true }).on('error', () => {}).unref();
   }
   headroom.iniciarSeLigado().catch((e) => console.error('[headroom]', e));
+  store.obter('ajustes', 'comandos').then((a) => a?.lista && definirComandosLiberados(a.lista)).catch(() => {});
   gestor.recuperar();
 });
 
@@ -826,6 +1043,7 @@ setInterval(() => gestor.tick(), 5000).unref();
 const encerrar = async () => {
   agentes.encerrarTodos();
   await headroom.parar();
+  pararTestes();
   await store.fechar?.();
   process.exit(0);
 };

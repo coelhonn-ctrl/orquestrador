@@ -11,7 +11,7 @@ import { atualizarPath } from './caminhos.js';
 
 const WIN = process.platform === 'win32';
 const LIMITE_LOG = 2 * 1024 * 1024;
-const COMANDOS = ['claude', 'agy', 'gemini', 'codex', 'ollama', 'node', 'npm', 'git', 'bash', 'uv', 'python', 'python3', 'ssh'];
+const COMANDOS = ['claude', 'agy', 'codex', 'ollama', 'node', 'npm', 'git', 'bash', 'uv', 'python', 'python3', 'ssh'];
 
 const umaLinha = (t, n) => String(t ?? '').replace(/\s+/g, ' ').trim().slice(-n);
 const recuo = (t) => (t ? t.replace(/^/gm, '      ') : '');
@@ -132,7 +132,7 @@ export const criarDiagnostico = ({ cfg, store, headroom }) => {
         continue;
       }
       L.push(`${cmd}: ${achados.join(' | ')}`);
-      if (['claude', 'agy', 'gemini', 'codex', 'ollama', 'node', 'git'].includes(cmd)) L.push(`  versão: ${await versaoDe(cmd)}`);
+      if (['claude', 'agy', 'codex', 'ollama', 'node', 'git'].includes(cmd)) L.push(`  versão: ${await versaoDe(cmd)}`);
     }
     if (WIN) {
       const gitBash = ['C:\\Program Files\\Git\\bin\\bash.exe', 'C:\\Program Files (x86)\\Git\\bin\\bash.exe', path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Git', 'bin', 'bash.exe')];
@@ -140,7 +140,7 @@ export const criarDiagnostico = ({ cfg, store, headroom }) => {
     }
 
     sec('Variáveis de ambiente relevantes (só se existem; valores ocultos)');
-    for (const k of ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_GIT_BASH_PATH', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'NODE_OPTIONS', 'ELECTRON_RUN_AS_NODE', 'ComSpec', 'SHELL']) {
+    for (const k of ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_GIT_BASH_PATH', 'GOOGLE_API_KEY', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'NODE_OPTIONS', 'ELECTRON_RUN_AS_NODE', 'ComSpec', 'SHELL']) {
       const v = Object.entries(process.env).find(([x]) => x.toUpperCase() === k.toUpperCase())?.[1];
       L.push(`${k}: ${v === undefined ? '(não definida)' : ['ComSpec', 'SHELL', 'ELECTRON_RUN_AS_NODE'].includes(k) ? v : '(definida)'}`);
     }
@@ -169,7 +169,7 @@ export const criarDiagnostico = ({ cfg, store, headroom }) => {
     }
 
     sec('Tarefas com problema (últimas 10)');
-    const problemas = (await store.listar('tarefas')).filter((t) => ['falhou', 'esperando'].includes(t.estado)).slice(-10);
+    const problemas = (await store.listar('tarefas')).filter((t) => ['falhou', 'esperando', 'pausada'].includes(t.estado)).slice(-10);
     if (!problemas.length) L.push('(nenhuma)');
     for (const t of problemas) L.push(`- ${t.id} · ${t.estado} · ${t.fase}`);
 

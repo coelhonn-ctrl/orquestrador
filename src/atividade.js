@@ -41,6 +41,7 @@ export const criarAtividade = ({ dir, bus }) => {
     revisao: (t) => `${t.id} ficou pronta para revisar: ${t.titulo}`,
     esperando: (t) => `${t.id} espera sua resposta: ${t.pergunta?.texto ?? t.titulo}`,
     falhou: (t) => `${t.id} parou: ${t.fase}`,
+    pausada: (t) => `${t.id} pausou: ${t.fase}`,
     concluida: (t) => `${t.id} foi concluída: ${t.titulo}`,
   };
   bus.aoEvento((e) => {

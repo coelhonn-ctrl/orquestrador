@@ -4,7 +4,14 @@ cd /d "%~dp0"
 
 where node >nul 2>nul
 if errorlevel 1 (
-  echo Precisa do Node.js 20 ou mais novo: https://nodejs.org
+  echo Precisa do Node.js 18 ou mais novo: https://nodejs.org
+  pause
+  exit /b 1
+)
+set NODEV=0
+for /f "tokens=1 delims=v." %%v in ('node -v') do set NODEV=%%v
+if %NODEV% LSS 18 (
+  echo O app precisa do Node.js 18 ou mais novo ^(encontrado: %NODEV%^). https://nodejs.org
   pause
   exit /b 1
 )

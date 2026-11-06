@@ -1,6 +1,7 @@
 // Front leve: carrega o estado uma vez e depois só reage aos eventos do servidor.
 import { criarTelaCanvas } from '/canvas.js';
 import { criarTelaCerebro } from '/cerebro.js';
+import { criarTelaComunicacao } from '/comunicacao.js';
 import { criarTelasTreino } from '/treino.js';
 import { abrirTerminal, avisarFim } from '/terminal-modal.js';
 
@@ -83,6 +84,7 @@ const gravarLocal = (k, v) => {
   } catch {}
 };
 const treinoTelas = criarTelasTreino({ S, $, esc, api, toast, ajuda });
+const telaComunicacao = criarTelaComunicacao({ S, $, esc, api, toast });
 const telaCerebro = criarTelaCerebro({ S, $, esc, api, toast, markdown: (t) => markdown(t), lerLocal: (k, p) => lerLocal(k, p), gravarLocal });
 
 const urlAnexo = (nome) => `/api/anexos/${encodeURIComponent(nome)}?token=${encodeURIComponent(token())}`;
@@ -95,7 +97,7 @@ const ia = (id) => S.d.ias.find((i) => i.id === id);
 const doProjeto = (t) => S.proj === 'todos' || t.projetoId === S.proj;
 const tarefas = (...estados) => S.d.tarefas.filter((t) => estados.includes(t.estado) && doProjeto(t));
 const naFila = () => tarefas('fila').sort((a, b) => a.posicao - b.posicao);
-const emAndamento = () => tarefas('planejando', 'executando', 'esperando').sort((a, b) => (a.iniciada ?? '').localeCompare(b.iniciada ?? ''));
+const emAndamento = () => tarefas('planejando', 'executando', 'esperando', 'pausada').sort((a, b) => (a.iniciada ?? '').localeCompare(b.iniciada ?? ''));
 const ordemEquipes = () => {
   const ordem = ['gestor', 'pesquisa', 'redacao', 'revisao-texto', 'codigo', 'debug', 'limpo', 'seguranca', 'dados', 'marketing', 'planejamento', 'infra'];
   const peso = (e) => (e.id === 'avaliador' ? 999 : ordem.indexOf(e.id) < 0 ? 500 : ordem.indexOf(e.id));
@@ -129,7 +131,7 @@ const decorrido = (iso) => {
   return `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')}`;
 };
 
-const corFase = (t) => ({ esperando: 'espera', revisao: t.avaliacao?.aprovado === false ? 'espera' : 'ok', falhou: 'erro', concluida: 'ok' })[t.estado] ?? '';
+const corFase = (t) => ({ esperando: 'espera', pausada: 'espera', revisao: t.avaliacao?.aprovado === false ? 'espera' : 'ok', falhou: 'erro', concluida: 'ok' })[t.estado] ?? '';
 const rotuloPasso = { atual: 'Trabalhando agora', espera: 'Esperando você', falhou: 'Falhou' };
 const equipeTrabalhando = (id) => S.d.tarefas.find((t) => t.plano?.some((p) => p.equipe === id && p.estado === 'atual'));
 
@@ -148,7 +150,7 @@ const htmlPassos = (t, { detalhado = false } = {}) => {
       return `<li class="s-${p.estado}">
         <div class="trilho"><span class="bola"></span>${i < arr.length - 1 ? '<span class="fio"></span>' : ''}</div>
         <div class="corpo">
-          <span class="eq">${esc(eq?.nome ?? p.equipe)} <span>${nova ? 'equipe nova, criada se você aprovar' : `com ${esc(p.ia ?? ia(eq?.principal)?.nome ?? '—')}`}${eq?.criadaPeloGestor ? ' · sob medida' : ''}</span></span>
+          <span class="eq">${esc(eq?.nome ?? p.equipe)} <span>${nova ? 'equipe nova, criada se você aprovar' : `com ${esc(p.ia ?? ia(eq?.principal)?.nome ?? '—')}`}${eq?.criadaPeloGestor ? ' · sob medida' : ''}${p.correcao ? ' · correção automática' : ''}</span></span>
           <span class="txt">${esc(texto)}</span>
           ${detalhado && p.estado === 'ok' && p.resumo ? `<span class="dica">Objetivo: ${esc(p.objetivo)}</span>` : ''}
           ${detalhado && p.arquivos?.length ? `<span class="arquivos">${p.arquivos.map(esc).join(' ')}</span>` : ''}
@@ -191,7 +193,59 @@ const rolarLog = (el) => el && (el.scrollTop = el.scrollHeight);
 
 // ------------------------------------------------------------------ topo
 
+// Treinos rodando ficam visíveis em qualquer tela, num painel pequeno no canto. Os que acabaram
+// há pouco ficam até você fechar, com o resultado.
+const TV_ATIVOS = ['gerando-casos', 'revisar', 'treinando', 'provando-ias'];
+const treinosVivos = () => {
+  const caixa = $('#r-treinos-vivo');
+  if (!caixa) return;
+  const fechados = new Set((lerLocal('orq.tv.fechados', '') || '').split(',').filter(Boolean));
+  const recente = (t) => t.estado === 'concluido' && t.concluido && Date.now() - Date.parse(t.concluido) < 30 * 60_000;
+  const lista = (S.d.treinos ?? []).filter((t) => (TV_ATIVOS.includes(t.estado) || recente(t) || t.estado === 'falhou' && Date.now() - Date.parse(t.atualizado ?? 0) < 30 * 60_000) && !fechados.has(`${t.id}:${t.estado}`));
+  // Na própria tela do treino o painel some para não repetir.
+  const naTela = rotaAtual().arg && location.hash.startsWith('#/treino/') ? rotaAtual().arg : null;
+  const mostrar = lista.filter((t) => t.id !== naTela);
+  caixa.hidden = !mostrar.length || !S.carregado || rotaAtual().nome === 'comecar';
+  if (caixa.hidden) {
+    document.body.style.paddingBottom = '';
+    return;
+  }
+  const ativos = mostrar.filter((t) => TV_ATIVOS.includes(t.estado)).length;
+  // Sem treino rodando, o painel fica recolhido (só o cabeçalho) até você abrir.
+  const escolha = lerLocal('orq.tv.recolhido', '');
+  const recolhido = escolha === '1' || (escolha === '' && !ativos);
+  const linha = (t) => {
+    const total = Math.max(1, t.rodadas * t.copias);
+    const feitas = (t.historico ?? []).reduce((n, r) => n + r.copias.filter((c) => c.media !== undefined).length, 0);
+    const atual = (t.historico ?? []).at(-1)?.copias.find((c) => c.progresso);
+    const pct = t.estado === 'concluido' ? 100 : t.estado === 'provando-ias' ? 95 : t.estado === 'treinando' ? Math.min(92, Math.round((feitas / total) * 100) + 4) : t.estado === 'revisar' ? 3 : 1;
+    const texto =
+      t.estado === 'gerando-casos'
+        ? 'O Treinador está criando os casos de teste.'
+        : t.estado === 'revisar'
+          ? 'Casos prontos: falta você revisar e começar.'
+          : t.estado === 'provando-ias'
+            ? 'Prova das IAs: a reserva responde aos casos.'
+            : t.estado === 'treinando'
+              ? `Rodada ${t.rodadaAtual ?? 1} de ${t.rodadas}${atual ? ` · cópia ${atual.id} respondendo ${atual.progresso}` : ''}`
+              : t.estado === 'falhou'
+                ? `Parou: ${t.erro ?? ''}`
+                : `${t.atingiu ? 'Meta atingida' : 'Meta não atingida'}${t.provaIAs?.promovida ? ' · reserva promovida' : ''}${t.aplicado ? ' · aplicado' : ''}`;
+    const nota = t.melhor?.media;
+    return `<div class="tv-item ${t.estado}">
+      <div class="tv-topo"><a href="#/treino/${esc(t.id)}" class="tv-nome">${esc(t.equipeNome)}</a>${nota !== undefined ? `<span class="tv-nota ${nota >= t.meta ? 'ok' : ''}" data-dica="Melhor nota até agora (meta ${t.meta}).">${nota}<small>/${t.meta}</small></span>` : ''}${TV_ATIVOS.includes(t.estado) ? '' : `<button type="button" class="icone-btn tv-x" aria-label="Fechar aviso do treino" data-acao="tv-fechar" data-id="${esc(t.id)}:${esc(t.estado)}">${I.x}</button>`}</div>
+      <span class="tv-txt">${esc(texto)}</span>
+      <span class="tv-barra"><span style="width:${pct}%"></span></span>
+    </div>`;
+  };
+  const rodando = ativos;
+  caixa.innerHTML = `<button type="button" class="tv-cab" data-acao="tv-recolher" aria-expanded="${!recolhido}"><span class="ponto ${rodando ? 'pulsa' : ''}"></span>${rodando ? `${rodando} ${rodando === 1 ? 'treino em andamento' : 'treinos em andamento'}` : `${mostrar.length} ${mostrar.length === 1 ? 'treino concluído' : 'treinos concluídos'}`}<span class="cresce"></span><span class="dica">${recolhido ? 'mostrar' : 'recolher'}</span></button>${recolhido ? '' : `<div class="tv-lista">${mostrar.map(linha).join('')}</div>`}`;
+  // Espaço no fim da página para o painel não cobrir botões.
+  document.body.style.paddingBottom = `${caixa.offsetHeight + 32}px`;
+};
+
 const atualizarTopo = () => {
+  treinosVivos();
   const cotas = S.d.ias
     .filter((i) => i.ativa && i.tipo !== 'shell' && (i.status === 'pronto' || i.tipo === 'simulado') && (i.uso?.chamadas || i.limiteAte))
     .map((i) => {
@@ -217,8 +271,11 @@ const atualizarTopo = () => {
       : demonstracao
         ? `<p class="aviso">Modo demonstração: as equipes respondem com exemplos, sem IA real. <a href="#/comecar">Escolha suas IAs</a> para elas trabalharem de verdade.</p>`
         : `<p class="aviso">Nenhuma IA em uso ainda. <a href="#/comecar">Escolha suas IAs</a> para as equipes e os agentes poderem trabalhar.</p>`;
-  for (const a of document.querySelectorAll('.secoes a')) a.toggleAttribute('aria-current', a.dataset.rota === rotaAtual().nome) || a.removeAttribute('aria-current');
-  for (const a of document.querySelectorAll('.secoes a[aria-current]')) a.setAttribute('aria-current', 'page');
+  const rota = rotaAtual().nome;
+  for (const a of document.querySelectorAll('.secoes a')) {
+    if (a.dataset.rota === rota) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  }
 };
 
 // ------------------------------------------------------------------ tela: solicitações
@@ -254,9 +311,23 @@ const telaInicio = {
     this.direita();
     this.fila();
     this.destino();
-    const caixa = $('#r-perguntas');
-    if (!caixa.contains(document.activeElement)) caixa.innerHTML = tarefas('esperando').map((t) => htmlPergunta(t)).join('');
+    this.perguntas();
     if (S.modo === 'terminal') this.terminalPills();
+  },
+
+  // Perguntas em aberto. Só segura o redesenho enquanto você digita uma resposta para uma pergunta
+  // que ainda está valendo; pergunta já respondida (ou trocada) sai da tela na hora.
+  perguntas() {
+    const caixa = $('#r-perguntas');
+    if (!caixa) return;
+    const abertas = tarefas('esperando').filter((t) => t.pergunta);
+    const chave = abertas.map((t) => `${t.id}:${t.pergunta.texto}`).join('|');
+    const ativo = document.activeElement;
+    const digitando = caixa.contains(ativo) && ativo.matches('input, textarea') && ativo.value.trim();
+    const daPergunta = digitando ? ativo.closest('[data-form="responder"]')?.dataset.id : null;
+    if (digitando && abertas.some((t) => t.id === daPergunta) && caixa.dataset.chave === chave) return;
+    caixa.dataset.chave = chave;
+    caixa.innerHTML = abertas.map((t) => htmlPergunta(t)).join('');
   },
 
   terminal(equipeId) {
@@ -284,7 +355,7 @@ const telaInicio = {
       <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap"><h2 class="titulo" id="pp-t" style="font-size:28px">Primeiros passos</h2><span class="dica">Três passos e o sistema está trabalhando para você.</span><div class="cresce"></div>
         <a href="#/ajuda" style="font-size:14px">Ler o manual</a><button type="button" class="link mudo" data-acao="passos-fechar">Já sei usar</button></div>
       <ol class="passos-lista">
-        ${passo(1, iaReal, 'Escolha suas IAs', 'Escolha entre Claude Code, Gemini CLI, Codex e Ollama. As que faltarem, o app instala quando você confirmar.', `<a class="btn pequeno" href="#/comecar">Escolher IAs</a>`)}
+        ${passo(1, iaReal, 'Escolha suas IAs', 'Escolha entre Claude Code, Antigravity, Codex e Ollama. As que faltarem, o app instala quando você confirmar.', `<a class="btn pequeno" href="#/comecar">Escolher IAs</a>`)}
         ${passo(2, feitos[1], 'Crie um projeto', 'Um projeto é uma pasta de trabalho, normalmente um repositório. As equipes e os agentes abrem os terminais nela.', `<button type="button" class="btn pequeno" data-acao="novo-projeto">Criar projeto</button>`)}
         ${passo(3, feitos[2], 'Escolha como trabalhar', '<b style="font-weight:500;color:var(--texto)">Solicitação:</b> você descreve o resultado, o gestor divide e o avaliador confere. <b style="font-weight:500;color:var(--texto)">Tela livre:</b> você monta os agentes, liga quem conversa com quem e acompanha cada terminal.', `<button type="button" class="btn pequeno" data-acao="focar-pedido">Escrever uma solicitação</button><a class="btn contorno pequeno" href="#/livre">Abrir a tela livre</a>`)}
       </ol>
@@ -357,10 +428,10 @@ const telaInicio = {
     if (S.modo === 'tarefa') {
       caixa.innerHTML = `<form class="empilha" style="gap:22px" data-form="tarefa">
         <label for="pedido" class="dica" style="font-size:14px" id="r-destino"></label>
-        <textarea id="pedido" class="pedido" rows="5" placeholder="Descreva a tarefa como explicaria para alguém da equipe. Prints e fotos ajudam.">${esc(S.draft)}</textarea>
+        <textarea id="pedido" class="pedido" rows="5" placeholder="Descreva a tarefa como explicaria para alguém da equipe. Prints, documentos e arquivos ajudam: anexe, cole ou arraste para cá.">${esc(S.draft)}</textarea>
         <div class="fotos" id="r-fotos"></div>
         <div class="acoes-pedido">
-          <label class="anexar">${I.foto}Anexar fotos<input type="file" accept="image/*" multiple data-mudar="fotos"></label>
+          <label class="anexar" data-dica="Qualquer arquivo: PDF, Word, planilha, código, texto, imagens, zip. Até 20 por tarefa, 50 MB cada. Também dá para colar ou arrastar para o pedido.">${I.foto}Anexar arquivos<input type="file" multiple data-mudar="fotos"></label>
           <span class="dica">Ctrl + Enter envia</span>
           <div class="cresce"></div>
           <button class="btn" type="submit">Colocar na fila</button>
@@ -417,7 +488,11 @@ const telaInicio = {
     const caixa = $('#r-fotos');
     if (!caixa) return;
     caixa.innerHTML = S.fotos
-      .map((f, i) => `<div class="foto"><img src="${f.dados}" alt="${esc(f.nome)}"><button type="button" aria-label="Remover foto" data-acao="remover-foto" data-i="${i}">${I.x}</button></div>`)
+      .map((f, i) =>
+        /^image\//.test(f.tipo ?? '') || /^data:image\//.test(f.dados)
+          ? `<div class="foto"><img src="${f.dados}" alt="${esc(f.nome)}"><button type="button" aria-label="Remover ${esc(f.nome)}" data-acao="remover-foto" data-i="${i}">${I.x}</button></div>`
+          : `<div class="arquivo-chip"><span class="arquivo-ext">${esc((f.nome.split('.').pop() || 'arq').slice(0, 4).toUpperCase())}</span><span class="arquivo-nome"><b>${esc(f.nome)}</b><small>${tamanhoLegivel(f.tamanho)}</small></span><button type="button" class="icone-btn" aria-label="Remover ${esc(f.nome)}" data-acao="remover-foto" data-i="${i}">${I.x}</button></div>`,
+      )
       .join('');
   },
 
@@ -427,6 +502,7 @@ const telaInicio = {
     const espera = ativas.filter((t) => t.estado === 'esperando').length;
     const revisar = tarefas('revisao');
     const falhas = tarefas('falhou');
+    const historico = tarefas('concluida', 'cancelada').sort((a, b) => (b.concluida ?? b.atualizada ?? '').localeCompare(a.concluida ?? a.atualizada ?? ''));
     const todos = S.proj === 'todos';
     if (!ativas.some((t) => t.id === S.sel)) S.sel = ativas[0]?.id ?? revisar[0]?.id ?? null;
     const card = (t) => `<button type="button" class="req" data-acao="selecionar" data-id="${t.id}" aria-pressed="${S.sel === t.id}">
@@ -437,10 +513,11 @@ const telaInicio = {
       </button>`;
     const link = (t) => `<a href="#/tarefa/${t.id}" class="req"><span class="tit">${esc(t.titulo)}</span>${todos ? `<span class="proj">${esc(projetoNome(t.projetoId))}</span>` : ''}<span class="fase ${corFase(t)}">${esc(t.fase)}</span></a>`;
     $('#r-esq').innerHTML = `
-      <p class="resumo"><b>${ativas.length}</b> em andamento e <b>${fila.length}</b> na fila${espera ? `, com <b>${espera}</b> esperando você.` : '.'}</p>
+      <p class="resumo"><b>${ativas.length}</b> em andamento e <b>${fila.length}</b> na fila${espera ? `, com <b>${espera}</b> esperando você.` : '.'} <a href="#/historico" style="white-space:nowrap">Ver histórico</a></p>
       <h2 class="rotulo" style="margin-top:12px">Em andamento ${ajuda('Tarefas que o gestor já pegou. Clique numa para ver o passo a passo à direita. A barra mostra uma etapa por equipe.')}</h2>
       ${ativas.length ? `<div class="lista-req">${ativas.map(card).join('')}</div>` : `<p class="vazio">Nada rodando${todos ? '' : ' neste projeto'}. Descreva a próxima tarefa ao lado.</p>`}
       ${revisar.length ? `<h2 class="rotulo" style="margin-top:16px">Prontas para revisar ${ajuda('O avaliador já conferiu. Abra para aprovar a entrega ou devolver com o que precisa mudar.')}</h2><div class="lista-req">${revisar.map(link).join('')}</div>` : ''}
+      ${historico.length ? `<h2 class="rotulo" style="margin-top:16px">Concluídas ${ajuda('As que você aprovou ou cancelou. Abra para ver as respostas, perguntar de novo às equipes ou reler a nota.')}</h2><div class="lista-req">${historico.slice(0, 5).map(link).join('')}</div><a href="#/historico" style="font-size:14px;align-self:flex-start">Ver todo o histórico (${historico.length})</a>` : ''}
       ${falhas.length ? `<h2 class="rotulo" style="margin-top:16px">Pararam com erro ${ajuda('Uma equipe não conseguiu concluir. Leia o motivo, ajuste (por exemplo, ligue uma IA em IAs) e clique em Tentar de novo.')}</h2><div class="lista-req">${falhas.map((t) => `<div class="empilha" style="gap:6px">${link(t)}<button type="button" class="link" data-acao="retomar" data-id="${t.id}" style="align-self:flex-start;padding-left:14px">Tentar de novo</button></div>`).join('')}</div>` : ''}`;
   },
 
@@ -459,7 +536,8 @@ const telaInicio = {
     $('#r-fila').innerHTML = fila.length
       ? `<ol>${fila
           .map((t, i) => {
-            const meta = [t.fotos?.length ? `${t.fotos.length} ${t.fotos.length === 1 ? 'foto' : 'fotos'}` : '', t.devolucoes ? 'devolvida' : '', t.origem ?? ''].filter(Boolean).join(', ');
+            const nAnexos = Math.max(t.arquivos?.length ?? 0, t.fotos?.length ?? 0);
+            const meta = [nAnexos ? `${nAnexos} ${nAnexos === 1 ? 'anexo' : 'anexos'}` : '', t.devolucoes ? 'devolvida' : '', t.origem ?? ''].filter(Boolean).join(', ');
             return `<li draggable="true" data-arrastar="${t.id}">
               <span class="pos">${i + 1}</span>
               <div class="tit"><span>${esc(t.titulo)}</span>${todos ? `<span class="meta">${esc(projetoNome(t.projetoId))}</span>` : ''}</div>
@@ -535,10 +613,42 @@ const opcoesIA = (selecionada, comNenhuma) =>
     )
     .join('');
 
+// Proposta do gestor para a equipe nova: duplicidade, nome, caminho, DNA e recomendação de treino.
+const desenharAnalise = () => {
+  const caixa = $('#r-analise-equipe');
+  if (!caixa) return;
+  const a = S.analiseEquipe;
+  if (!a) return (caixa.innerHTML = '');
+  if (a.carregando) return (caixa.innerHTML = `<div class="analise-equipe"><p class="dica conversa-espera">O gestor está analisando: procurando equipes parecidas, refinando o nome e escrevendo o prompt de base…</p></div>`);
+  const p = a.proposta;
+  const NIVEL = { leve: 'Leve', medio: 'Médio', profundo: 'Profundo' };
+  caixa.innerHTML = `<form class="analise-equipe empilha" data-form="proposta-equipe">
+    <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap"><h3 class="titulo" style="font-size:24px;margin:0">Proposta do gestor</h3><span class="dica">${p.porIA ? `analisada por ${esc(p.porIA)}` : 'sem IA disponível: montada com o padrão do assunto'}</span></div>
+    ${
+      p.duplicada
+        ? `<div class="aviso"><b>Já temos a equipe ${esc(p.duplicada.nome)} ativa.</b> Recomendo apenas ajustar o prompt base dela para esse novo objetivo, em vez de criar uma nova.${p.duplicada.motivo ? ` <span class="dica">${esc(p.duplicada.motivo)}</span>` : ''}
+          <div style="display:flex;gap:12px;margin-top:10px;flex-wrap:wrap"><button type="button" class="btn pequeno" data-acao="eq-ajustar-existente" data-id="${esc(p.duplicada.id)}">Ajustar ${esc(p.duplicada.nome)}</button><span class="dica" style="align-self:center">ou revise abaixo e crie mesmo assim</span></div></div>`
+        : ''
+    }
+    <div class="tr-linha">
+      <div class="grupo" style="flex:1 1 220px"><label for="pe-nome">Nome refinado</label><input class="campo" id="pe-nome" name="nome" value="${esc(p.nome)}"></div>
+      <div class="grupo" style="flex:2 1 360px"><label for="pe-cam">Caminho na árvore do cérebro ${ajuda('Categoria > Subcategoria > Domínio > Especialidade. É onde o conhecimento desta equipe fica no mapa do cérebro.')}</label><input class="campo" id="pe-cam" name="caminho" value="${esc(p.caminho.join(' > '))}"></div>
+    </div>
+    <div class="grupo"><label for="pe-inst">Prompt comportamental de base ${ajuda('O DNA da equipe: padrão de referência, regras de trabalho e formato de entrega. Ajuste à vontade antes de criar.')}</label><textarea class="campo mono tr-auto" id="pe-inst" name="instrucoes" rows="${Math.min(24, Math.max(8, p.instrucoes.split('\n').length + 1))}" style="font-size:13px">${esc(p.instrucoes)}</textarea></div>
+    <div class="aviso ${p.treino.recomendado ? '' : 'ok'}" style="${p.treino.recomendado ? '' : 'background:rgba(111,211,155,.08);color:var(--ok)'}"><b>${p.treino.recomendado ? `Recomendo iniciar um treino de nível ${NIVEL[p.treino.nivel] ?? p.treino.nivel} antes de usar.` : 'Pode pular o treino e começar direto.'}</b> ${esc(p.treino.motivo)}</div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+      <button class="btn" type="submit" data-acao="eq-criar-sem-treino">${p.treino.recomendado ? 'Criar sem treinar' : 'Criar equipe'}</button>
+      <button class="btn ${p.treino.recomendado ? '' : 'contorno'}" type="submit" data-acao="eq-criar-e-treinar">Criar e treinar</button>
+      <button type="button" class="btn texto" data-acao="eq-descartar-analise">Descartar</button>
+    </div>
+  </form>`;
+  caixa.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
 const telaEquipes = {
   montar() {
     $('#app').innerHTML = `<div class="pagina">
-      <div class="pagina-cab"><h1>Equipes</h1><a class="btn pequeno" href="#/objetivos" data-dica="Marque para que você usa o app e criamos as equipes desses objetivos.">Adicionar por objetivo</a></div>
+      <div class="pagina-cab"><h1>Equipes</h1><a class="btn pequeno" href="#/objetivos" data-dica="Marque para que você usa o app e criamos as equipes desses objetivos.">Adicionar por objetivo</a><a class="btn contorno pequeno" href="#/skills" data-dica="Habilidades modulares (checklists, roteiros, jeitos de fazer) que as equipes herdam. Ficam no cérebro, em 40-skills.">Central de skills</a></div>
       <p class="intro">As equipes nascem dos seus objetivos ou do gestor, quando um pedido precisa. Cada uma tem uma IA principal e uma reserva, sempre entre as IAs que você escolheu. Se a principal ficar sem cota ou falhar no meio, o gestor remaneja a etapa para a reserva e, se preciso, para qualquer outra IA disponível que consiga fazer o trabalho.</p>
       <div class="linhas" id="r-equipes"></div>
       <h2 class="titulo" style="font-size:26px;margin-top:20px" id="nova-equipe">Nova equipe</h2>
@@ -554,10 +664,10 @@ const telaEquipes = {
         <div class="grupo largo"><label for="ne-i">Instruções da equipe (opcional)</label><textarea class="campo" id="ne-i" name="instrucoes" rows="3" placeholder="Regras que o supervisor sempre segue."></textarea></div>
         ${comAjuda('<label class="check"><input type="checkbox" name="requer" value="editar">Precisa editar arquivos</label>', 'Só IAs que alteram o projeto podem assumir esta equipe.')}
         ${comAjuda('<label class="check"><input type="checkbox" name="aprovacao">Pedir minha aprovação</label>', 'A tarefa para antes de cada etapa desta equipe até você liberar.')}
-        ${comAjuda('<label class="check"><input type="checkbox" name="treinar" checked>Treinar logo depois de criar</label>', 'Abre o treino desta equipe assim que ela for criada.')}
         <div class="cresce"></div>
-        <button class="btn" type="submit">${I.mais}Criar equipe</button>
+        <button class="btn" type="submit" data-dica="O gestor confere se já existe uma equipe parecida, refina o nome, escreve o prompt comportamental de base e diz se vale treinar antes. Nada é criado sem você confirmar.">Analisar com o gestor</button>
       </form>
+      <div id="r-analise-equipe" aria-live="polite"></div>
     </div>`;
     this.atualizar(true);
   },
@@ -571,6 +681,20 @@ const telaEquipes = {
       .map(([familia, lista]) => `<div class="eq-grupo"><div class="eq-grupo-cab"><h2 class="titulo">${esc(familia)}</h2><span class="dica">${lista.length} ${lista.length === 1 ? 'equipe' : 'equipes'}</span><div class="cresce"></div>${familia === 'Sistema' ? '' : `<button type="button" class="link" data-acao="eq-especializar" data-familia="${esc(familia === 'Sem família' ? '' : familia)}" data-dica="Cria uma equipe nova e independente nesta família, com um foco mais específico. Depois você pode treiná-la.">+ Nova especialização</button>`}</div>${lista.map((e) => linhaEquipe(e)).join('')}</div>`)
       .join('');
   },
+};
+
+// Nota de cada IA na última prova de treino desta equipe, e o placar real (avaliador aprovou / apontou problema).
+const desempenhoEquipe = (e) => {
+  const prova = Object.entries(e.desempenho ?? {});
+  const real = Object.entries(e.desempenhoReal ?? {});
+  if (!prova.length && !real.length) return '';
+  const papel = (id) => (id === e.principal ? 'principal' : id === e.reserva ? 'reserva' : '');
+  const exigido = (id) => (id === e.principal ? e.treino?.meta ?? 80 : e.treino?.metaReserva ?? 70);
+  const itens = prova
+    .sort((a, b) => b[1].media - a[1].media)
+    .map(([id, d]) => `<span class="${papel(id) && d.media < exigido(id) ? 'baixa' : ''}" data-dica="Nota na prova do treino ${esc(d.treino)}${papel(id) ? ` como ${papel(id)} (mínimo ${exigido(id)})` : ''}.">${esc((d.nome ?? ia(id)?.nome ?? id).replace(/ (CLI|Code)$/, ''))} <b>${d.media}</b>${papel(id) ? ` · ${papel(id)}` : ''}</span>`);
+  const reais = real.map(([id, d]) => `<span data-dica="Entregas desta equipe conferidas pelo avaliador.">${esc((d.nome ?? ia(id)?.nome ?? id).replace(/ (CLI|Code)$/, ''))}: <b>${d.aprovadas}</b> aprovadas${d.problemas ? `, <b>${d.problemas}</b> com problema` : ''}</span>`);
+  return `<small class="eq-desemp">${itens.length ? `Desempenho: ${itens.join('')}` : ''}${reais.length ? `${itens.length ? ' · ' : ''}Tarefas: ${reais.join('')}` : ''}</small>`;
 };
 
 // Grupos: Sistema (gestor, avaliador, treinador), cada família e as equipes sem família.
@@ -588,14 +712,14 @@ const gruposDeEquipes = () => {
 const linhaEquipe = (e) => {
         const aberto = S.abertos.has(`eq-${e.id}`);
         const treinos = S.d.treinos.filter((t) => t.equipeId === e.id).sort((a, b) => (a.criado < b.criado ? 1 : -1));
-        const emTreino = treinos.find((t) => ['gerando-casos', 'revisar', 'treinando'].includes(t.estado));
+        const emTreino = treinos.find((t) => ['gerando-casos', 'revisar', 'treinando', 'pausado'].includes(t.estado));
         return `<div class="linha">
-          <div class="nome"><span>${esc(e.nome)}${e.treino?.nota ? ` <span class="selo ok" data-dica="Nota no último treino aplicado (meta ${e.treino.meta}). Versão ${e.treino.versao}.">treinada · ${e.treino.nota}</span>` : ''}${emTreino ? ` <a class="selo acento" href="#/treino/${emTreino.id}">em treino</a>` : ''}${e.fixa ? ' <span class="dica">sempre ativa</span>' : ''}${!e.principal ? ' <span class="dica erro">sem IA: escolha uma</span>' : ''}${e.criadaPeloGestor ? ` <span class="dica">criada pelo gestor${e.projetoId ? ` para ${esc(projetoNome(e.projetoId))}` : ''}</span>` : ''}</span><small>${esc(e.desc)}</small>${e.foco || e.contextos?.length ? `<small class="eq-foco">${e.foco ? `Foco: ${esc(e.foco)}` : ''}${e.contextos?.length ? `${e.foco ? ' · ' : ''}Contextos: ${e.contextos.map(esc).join(', ')}` : ''}</small>` : ''}</div>
+          <div class="nome"><span>${esc(e.nome)}${e.treino?.nota ? ` <span class="selo ok" data-dica="Nota no último treino aplicado (meta ${e.treino.meta}). Versão ${e.treino.versao}.">treinada · ${e.treino.nota}</span>` : ''}${emTreino ? ` <a class="selo acento" href="#/treino/${emTreino.id}">em treino</a>` : ''}${e.fixa ? ' <span class="dica">sempre ativa</span>' : ''}${!e.principal ? ' <span class="dica erro">sem IA: escolha uma</span>' : ''}${e.criadaPeloGestor ? ` <span class="dica">criada pelo gestor${e.projetoId ? ` para ${esc(projetoNome(e.projetoId))}` : ''}</span>` : ''}</span><small>${esc(e.desc)}</small>${e.foco || e.contextos?.length ? `<small class="eq-foco">${e.foco ? `Foco: ${esc(e.foco)}` : ''}${e.contextos?.length ? `${e.foco ? ' · ' : ''}Contextos: ${e.contextos.map(esc).join(', ')}` : ''}</small>` : ''}${desempenhoEquipe(e)}</div>
           <div class="grupo"><label for="p-${e.id}">IA principal ${ajuda('A IA que faz o trabalho desta equipe.')}</label><select class="campo" id="p-${e.id}" data-mudar="equipe" data-id="${e.id}" data-campo="principal">${opcoesIA(e.principal)}</select></div>
           <div class="grupo"><label for="r-${e.id}">Reserva ${ajuda('Assume se a principal falhar ou ficar sem cota. Se a reserva também falhar, o gestor tenta qualquer outra IA disponível.')}</label><select class="campo" id="r-${e.id}" data-mudar="equipe" data-id="${e.id}" data-campo="reserva">${opcoesIA(e.reserva, true)}</select></div>
           ${comAjuda(`<label class="check"><input type="checkbox" data-mudar="equipe" data-id="${e.id}" data-campo="aprovacao" ${e.aprovacao ? 'checked' : ''}>Pedir minha aprovação</label>`, 'Antes desta equipe começar uma etapa, a tarefa para e espera você liberar ou pular.')}
           ${comAjuda(`<label class="check"><input type="checkbox" data-mudar="equipe" data-id="${e.id}" data-campo="ativa" ${e.ativa !== false ? 'checked' : ''} ${e.fixa ? 'disabled' : ''}>Ativa</label>`, e.fixa ? 'Gestor e avaliador fazem parte de toda tarefa e não podem ser desligados.' : 'Desligada, o gestor não usa esta equipe nos próximos planos.')}
-          ${['gestor', 'avaliador', 'treinador'].includes(e.id) ? '' : `<a class="btn contorno pequeno" href="#/treinar/${esc(e.id)}" data-dica="Treina esta equipe num foco: o Treinador cria casos de teste, cópias da equipe competem e a melhor vira a versão oficial.">Treinar</a>`}
+          ${['gestor', 'avaliador'].includes(e.id) ? '' : e.id === 'treinador' ? `<a class="btn contorno pequeno" href="#/treinar/treinador" data-dica="Forma o Treinador como um professor: outra IA aplica uma prova de ensino e o melhor método passa a guiar todos os treinos.">Treinar o Treinador</a>` : `<a class="btn contorno pequeno" href="#/treinar/${esc(e.id)}" data-dica="Treina esta equipe num foco: o Treinador cria casos de teste, cópias da equipe competem e a melhor vira a versão oficial.">Treinar</a>`}
           <button type="button" class="link" data-acao="abrir" data-chave="eq-${e.id}" aria-expanded="${aberto}">${aberto ? 'Fechar' : 'Detalhes'}</button>
           ${
             aberto
@@ -605,7 +729,12 @@ const linhaEquipe = (e) => {
             ${e.fixa ? '' : `<div class="grupo"><label for="f-${e.id}">Família ${ajuda('Agrupa equipes do mesmo assunto (ex.: Segurança). Cada uma continua independente.')}</label><input class="campo" id="f-${e.id}" list="familias" value="${esc(e.familia ?? '')}" data-mudar="equipe" data-id="${e.id}" data-campo="familia" placeholder="Ex.: Segurança"></div>
             <div class="grupo" style="flex:2 1 320px"><label for="fo-${e.id}">Foco / especialidade ${ajuda('O gestor usa isso para escolher a equipe mais específica para cada pedido.')}</label><input class="campo" id="fo-${e.id}" value="${esc(e.foco ?? '')}" data-mudar="equipe" data-id="${e.id}" data-campo="foco" placeholder="Ex.: segurança de eventos noturnos"></div>
             <div class="grupo" style="flex-basis:100%"><label for="c-${e.id}">Contextos (separados por vírgula) ${ajuda('Palavras de quando usar esta equipe. Ex.: balada, show, portaria, lotação.')}</label><input class="campo" id="c-${e.id}" value="${esc((e.contextos ?? []).join(', '))}" data-mudar="equipe" data-id="${e.id}" data-campo="contextos"></div>`}
-            <div class="grupo" style="flex-basis:100%"><label for="i-${e.id}">Instruções da equipe${e.treino?.nota ? ` <span class="dica">(vieram do treino ${esc(e.treino.id)})</span>` : ''}</label><textarea class="campo" id="i-${e.id}" rows="4" data-mudar="equipe" data-id="${e.id}" data-campo="instrucoes" placeholder="Regras que o supervisor sempre segue.">${esc(e.instrucoes)}</textarea></div>
+            <div class="grupo" style="flex-basis:100%"><label for="i-${e.id}">Instruções da equipe${e.treino?.nota ? ` <span class="dica">(vieram do treino ${esc(e.treino.id)})</span>` : ''}</label><textarea class="campo" id="i-${e.id}" rows="10" data-mudar="equipe" data-id="${e.id}" data-campo="instrucoes" placeholder="Regras que o supervisor sempre segue.">${esc(e.instrucoes)}</textarea></div>
+            <div class="grupo" style="flex-basis:100%"><label for="cm-${e.id}">Caminho na árvore do cérebro ${ajuda('Categoria > Subcategoria > Domínio > Especialidade. Organiza o mapa do cérebro (20-areas/_mapa.md) e diz à equipe por onde começar a procurar.')}</label><input class="campo" id="cm-${e.id}" data-mudar="equipe" data-id="${e.id}" data-campo="caminho" value="${esc((e.caminho ?? []).join(' > '))}" placeholder="Ex.: Desenvolvimento > Interno > Qualidade > Código limpo"></div>
+            ${(() => {
+              const herdadas = (S.d.skills ?? []).filter((k) => k.todas || k.equipes.includes(e.id));
+              return `<div class="grupo" style="flex-basis:100%"><span class="dica">Skills: ${herdadas.length ? herdadas.map((k) => `<a href="#/skills/${esc(k.id)}">${esc(k.nome)}</a>`).join(', ') : 'nenhuma'} · <a href="#/skills">Central de skills</a></span></div>`;
+            })()}
             ${comAjuda(`<label class="check"><input type="checkbox" data-mudar="equipe" data-id="${e.id}" data-campo="requer" ${e.requer === 'editar' ? 'checked' : ''}>Precisa editar arquivos</label>`, 'Marcado, esta equipe só recebe IAs que conseguem alterar o projeto. O Ollama, por exemplo, só conversa e fica de fora.')}
             <span class="dica">Área no vault: <span class="mono acento">20-areas/${esc(e.area)}</span></span>
             ${treinos.length ? `<div class="empilha" style="flex-basis:100%;gap:4px"><span class="rotulo">Treinos</span>${treinos.slice(0, 6).map((t) => `<a href="#/treino/${t.id}" class="dica" style="color:var(--acento-texto)">${esc(t.id)} · ${esc(t.estado)}${t.melhor ? ` · melhor ${t.melhor.media}/100` : ''}${t.aplicado ? ' · aplicado' : ''}</a>`).join('')}</div>` : ''}
@@ -630,6 +759,25 @@ const telaIAs = {
         <details><summary class="link" style="cursor:pointer">Log do Headroom</summary><div class="log" id="log-headroom" style="margin-top:10px" aria-live="polite"></div></details>
         <pre class="nota" id="r-economia" style="display:none"></pre>
       </section>
+      <section class="empilha" style="gap:12px;padding:22px;border-radius:14px;background:var(--sup-3)" aria-label="Modelo por dificuldade">
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:14px 24px">
+          <div class="nome" style="display:flex;flex-direction:column;gap:4px;flex:1 1 320px">
+            <span class="serif" style="font-size:22px">Modelo por dificuldade</span>
+            <small style="font-size:14px;color:var(--suave);line-height:1.45">O gestor diz se cada etapa é simples, média ou difícil, e a etapa roda no modelo rápido, padrão ou forte da IA. Equipe treinada ou com conhecimento validado desce um nível; equipe que vem errando sobe. Se o avaliador reprovar, as etapas são refeitas uma vez no forte. Treinos usam o forte para consolidar o conhecimento.</small>
+          </div>
+          <label class="check"><input type="checkbox" data-mudar="niveis-auto" ${S.d.niveisModelo?.automatico !== false ? 'checked' : ''}>Escolher o modelo pela dificuldade</label>
+          <a class="btn contorno pequeno" href="#/consumo">Ver consumo</a>
+        </div>
+        <span class="dica">Os modelos de cada nível ficam em Configurar, em cada IA. Pedido trivial (uma pergunta rápida) vai direto no modelo rápido, sem avaliador.</span>
+      </section>
+      <section class="empilha" style="gap:12px;padding:22px;border-radius:14px;background:var(--sup-3)" aria-label="Comandos liberados">
+        <div class="nome" style="display:flex;flex-direction:column;gap:4px">
+          <span class="serif" style="font-size:22px">Comandos que as IAs podem rodar</span>
+          <small style="font-size:14px;color:var(--suave);line-height:1.45">As IAs trabalham sem tela, então não conseguem pedir a sua aprovação: o comando que não estiver nesta lista é recusado na hora. Vale para o Claude Code. Um por linha ou separados por vírgula (ex.: npm, npx, tsc, git status). Deixe vazio para não liberar nenhum.</small>
+        </div>
+        <textarea class="campo" id="r-comandos" rows="3" style="font-family:var(--mono);font-size:13px">${esc((S.d.comandosLiberados ?? []).join(', '))}</textarea>
+        <div><button type="button" class="btn pequeno" data-acao="salvar-comandos">Salvar comandos</button></div>
+      </section>
       <div class="linhas" id="r-ias"></div>
       <h2 class="titulo" style="font-size:26px;margin-top:20px">Cadastrar IA</h2>
       <form class="form-nova" data-form="ia">
@@ -641,7 +789,7 @@ const telaIAs = {
         <div class="grupo"><label for="ni-cmd">Comando</label><input class="campo mono" id="ni-cmd" name="comando" placeholder="padrão do tipo"></div>
         <div class="grupo"><label for="ni-modelo">Modelo (se houver)</label><input class="campo mono" id="ni-modelo" name="modelo"></div>
         <div class="grupo largo"><label for="ni-args">Argumentos</label><input class="campo mono" id="ni-args" name="args" placeholder="${esc((tipos.claude?.args ?? []).join(' '))}"><span class="dica">Use {prompt} onde entra a instrução e {modelo} para o modelo. Em branco, usa o padrão do tipo.</span></div>
-        <div class="grupo largo"><label for="ni-env">Variáveis de ambiente, uma por linha</label><textarea class="campo mono" id="ni-env" name="env" rows="2" placeholder="GEMINI_API_KEY=..."></textarea><span class="dica">Útil para uma segunda conta ou outra pasta de configuração, ex.: CLAUDE_CONFIG_DIR=~/.claude-trabalho</span></div>
+        <div class="grupo largo"><label for="ni-env">Variáveis de ambiente, uma por linha</label><textarea class="campo mono" id="ni-env" name="env" rows="2" placeholder="OPENAI_API_KEY=..."></textarea><span class="dica">Útil para outra pasta de configuração, ex.: CLAUDE_CONFIG_DIR=~/.claude-trabalho. Para outra conta do Claude, use "Adicionar conta" em Contas do Claude.</span></div>
         <label class="check"><input type="checkbox" name="arquivos" checked>Lê arquivos do disco</label>
         <label class="check"><input type="checkbox" name="editar" checked>Edita o projeto</label>
         <div class="cresce"></div>
@@ -686,7 +834,7 @@ const telaIAs = {
         <div class="cresce"></div>
         <button type="button" class="link" data-acao="hr-economia">Ver economia</button>
       </div>
-      <p class="dica" style="margin-top:10px">Compatível com Claude Code, Codex e CLIs que aceitem ANTHROPIC_BASE_URL ou OPENAI_BASE_URL. Gemini CLI e Ollama seguem direto.</p>`
+      <p class="dica" style="margin-top:10px">Compatível com Claude Code, Codex e CLIs que aceitem ANTHROPIC_BASE_URL ou OPENAI_BASE_URL. Antigravity e Ollama seguem direto.</p>`
           : `<p class="dica" style="margin-top:10px">Precisa do Python. Se não houver, perguntamos antes e instalamos só para o seu usuário. A versão padrão traz o proxy; a completa inclui o modelo de compressão de texto e baixa vários GB (PyTorch).</p>`
       }`;
   },
@@ -718,15 +866,22 @@ const telaIAs = {
             <div class="grupo"><label for="in-${i.id}">Nome</label><input class="campo" id="in-${i.id}" name="nome" value="${esc(i.nome)}"></div>
             <div class="grupo"><label for="ic-${i.id}">Comando</label><input class="campo mono" id="ic-${i.id}" name="comando" value="${esc(i.comando)}" placeholder="padrão do tipo"></div>
             <div class="grupo"><label for="im-${i.id}">Modelo</label><input class="campo mono" id="im-${i.id}" name="modelo" value="${esc(i.modelo)}"></div>
+            ${
+              tipos[i.tipo]?.niveis
+                ? `<fieldset class="niveis-ia" style="flex-basis:100%;border:none;margin:0;padding:0;display:flex;gap:12px;flex-wrap:wrap"><legend class="dica" style="margin-bottom:6px">Modelo de cada nível ${ajuda('Nome do modelo que a ferramenta aceita (ex.: haiku, sonnet, opus no Claude Code). Vazio usa o padrão da própria ferramenta. Se a sua conta não tiver um modelo, o app usa o padrão e avisa.')}</legend>${['rapido', 'padrao', 'forte']
+                    .map((n) => `<div class="grupo" style="flex:1 1 150px"><label for="iv-${n}-${i.id}">${NOME_NIVEL[n][0].toUpperCase() + NOME_NIVEL[n].slice(1)}</label><input class="campo mono" id="iv-${n}-${i.id}" name="nivel-${n}" value="${esc(i.niveis?.[n] ?? tipos[i.tipo].niveis[n] ?? '')}" placeholder="padrão da ferramenta"></div>`)
+                    .join('')}</fieldset>`
+                : ''
+            }
             <div class="grupo" style="flex-basis:100%"><label for="ia-${i.id}">Argumentos para o gestor (sem interação)</label><input class="campo mono" id="ia-${i.id}" name="args" value="${esc((i.args ?? []).join(' '))}" placeholder="${esc((tipos[i.tipo]?.args ?? []).join(' '))}"></div>
             <div class="grupo" style="flex-basis:100%"><label for="ii-${i.id}">Argumentos no terminal interativo (tela livre)</label><input class="campo mono" id="ii-${i.id}" name="argsInterativo" value="${esc((i.argsInterativo ?? []).join(' '))}" placeholder="${esc((tipos[i.tipo]?.interativo ?? []).join(' ') || 'nenhum')}"></div>
-            <div class="grupo" style="flex-basis:100%"><label for="ie-${i.id}">Variáveis de ambiente</label><textarea class="campo mono" id="ie-${i.id}" name="env" rows="2" placeholder="CHAVE=valor">${esc((i.env ?? []).map((k) => `${k}=••••`).join('\n'))}</textarea><span class="dica">Valores salvos aparecem como ••••. Deixe assim para manter.</span></div>
+            <div class="grupo" style="flex-basis:100%"><label for="ie-${i.id}">Variáveis de ambiente</label><textarea class="campo mono" id="ie-${i.id}" name="env" rows="2" placeholder="CHAVE=valor">${esc((i.env ?? []).map((k) => `${k}=${i.envVisivel?.[k] ?? '••••'}`).join('\n'))}</textarea><span class="dica">Chaves e senhas salvas aparecem como ••••. Deixe assim para manter.</span></div>
             <label class="check"><input type="checkbox" name="arquivos" ${i.capacidades?.arquivos ? 'checked' : ''}>Lê arquivos do disco</label>
             <label class="check"><input type="checkbox" name="editar" ${i.capacidades?.editar ? 'checked' : ''}>Edita o projeto</label>
             <div class="cresce"></div>
             ${i.tipo === 'simulado' ? '' : `<button type="button" class="link mudo" data-acao="remover-ia" data-id="${i.id}">Remover</button>`}
             <button class="btn pequeno" type="submit">Salvar</button>
-          </form>`
+          </form>${htmlContas(i)}`
               : ''
           }
         </div>`;
@@ -735,9 +890,246 @@ const telaIAs = {
   },
 };
 
+// Pool de contas da IA: quando uma bate o limite, a próxima assume na hora.
+const htmlContas = (i) => {
+  if (['shell', 'simulado', 'custom'].includes(i.tipo)) return '';
+  const hora = (iso) => new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  const situacao = (c) =>
+    c.problema ? `<span class="erro">com problema: ${esc(c.problema.motivo ?? '')}</span>` : c.limiteAte && Date.parse(c.limiteAte) > Date.now() ? `<span style="color:var(--espera)">sem cota até ${hora(c.limiteAte)}</span>` : c.desligada ? '<span class="dica">desligada</span>' : '<span style="color:var(--ok)">livre</span>';
+  const principal = { id: 'principal', nome: 'Conta principal', ...(i.contaPrincipal ?? {}), descricao: 'o login padrão desta ferramenta' };
+  const podeEntrar = !!S.d.planos[i.tipo];
+  const linha = (c) => `<div class="conta-linha">
+      <span class="conta-nome"><b>${esc(c.nome)}</b><small>${c.id === 'principal' ? esc(c.descricao) : c.perfil ? `perfil separado${c.pasta ? ` · ${esc(c.pasta)}` : ''}` : `chave: ${esc((c.env ?? []).join(', '))}`}</small></span>
+      <span class="conta-sit">${situacao(c)}</span>
+      ${c.id !== 'principal' && c.perfil && podeEntrar ? `<button type="button" class="link" data-acao="conta-entrar" data-id="${i.id}" data-conta="${esc(c.id)}">Entrar nesta conta</button>` : ''}
+      <button type="button" class="link" data-acao="conta-testar" data-id="${i.id}" data-conta="${esc(c.id)}">Testar</button>
+      ${(c.limiteAte && Date.parse(c.limiteAte) > Date.now()) || c.problema ? `<button type="button" class="link" data-acao="conta-liberar" data-id="${i.id}" data-conta="${esc(c.id)}">Liberar</button>` : ''}
+      ${c.id !== 'principal' ? `<button type="button" class="link mudo" data-acao="conta-remover" data-id="${i.id}" data-conta="${esc(c.id)}">Remover</button>` : ''}
+    </div>`;
+  const exemploChave = { claude: 'ANTHROPIC_API_KEY=sk-ant-...', codex: 'OPENAI_API_KEY=sk-...', antigravity: 'GEMINI_API_KEY=sua-chave' }[i.tipo] ?? 'CHAVE=valor';
+  return `<div class="contas-ia">
+    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap"><span class="rotulo">Contas desta IA</span>${ajuda('Quando uma conta bate o limite de uso, o app troca na hora para a próxima conta livre da lista, sem parar a tarefa. O contexto não se perde: está no cérebro. Só quando todas batem o limite a tarefa passa para a IA reserva.')}<span class="dica">${(i.contas?.length ?? 0) + 1} ${(i.contas?.length ?? 0) ? 'contas em rodízio' : 'conta'}</span></div>
+    ${[principal, ...(i.contas ?? [])].map(linha).join('')}
+    <form class="conta-nova" data-form="conta-nova" data-id="${i.id}">
+      <div class="grupo" style="flex:1 1 180px"><label for="cn-n-${i.id}">Nova conta</label><input class="campo" id="cn-n-${i.id}" name="nome" placeholder="Ex.: Google do trabalho"></div>
+      <div class="grupo" style="flex:2 1 280px"><label for="cn-e-${i.id}">Chave da conta (opcional se usar perfil)</label><input class="campo mono" id="cn-e-${i.id}" name="env" placeholder="${esc(exemploChave)}"></div>
+      ${PERFIL_TIPOS.includes(i.tipo) ? comAjuda(`<label class="check"><input type="checkbox" name="perfil" checked>Perfil separado</label>`, 'Cria uma pasta só desta conta, onde a ferramenta guarda o login. Depois clique em "Entrar nesta conta" e faça o login com a outra conta Google.') : ''}
+      <button class="btn contorno pequeno" type="submit">Adicionar conta</button>
+    </form>
+  </div>`;
+};
+const PERFIL_TIPOS = ['claude', 'codex', 'antigravity'];
+
+// ------------------------------------------------------------------ tela: central de skills
+
+const telaSkills = {
+  montar(arg) {
+    this.editando = arg ? decodeURIComponent(arg) : null;
+    $('#app').innerHTML = `<div class="pagina" id="r-skills"></div>`;
+    this.carregar();
+  },
+  atualizar() {},
+  async carregar() {
+    try {
+      this.lista = await api('GET', '/api/skills');
+    } catch {
+      this.lista = [];
+    }
+    this.desenhar();
+  },
+  desenhar() {
+    const caixa = $('#r-skills');
+    if (!caixa) return;
+    const sk = this.lista.find((k) => k.id === this.editando) ?? null;
+    const equipesTrabalho = S.d.equipes.filter((e) => e.id !== 'gestor');
+    caixa.innerHTML = `
+      <div class="pagina-cab"><h1>Central de skills</h1><a class="btn texto pequeno" href="#/equipes">← Equipes</a></div>
+      <p class="intro">Uma skill é uma habilidade modular: um checklist, um roteiro, um jeito de fazer que você quer que as equipes sigam. Ela fica no cérebro (40-skills) e vai junto nas instruções das equipes que a herdam, em toda tarefa.</p>
+      <div class="skills-grade">
+        <div class="empilha" style="gap:8px">
+          <button type="button" class="btn ${sk ? 'contorno' : ''} pequeno" data-acao="skill-nova" style="align-self:flex-start">${I.mais}Nova skill</button>
+          ${
+            this.lista.length
+              ? this.lista
+                  .map(
+                    (k) => `<a class="skill-item ${k.id === this.editando ? 'sel' : ''}" href="#/skills/${esc(k.id)}"><b>${esc(k.nome)}</b><small>${esc(k.descricao || 'sem descrição')}</small><small class="dica">${k.todas ? 'todas as equipes' : k.equipes.length ? k.equipes.map((id) => esc(S.d.equipes.find((e) => e.id === id)?.nome ?? id)).join(', ') : 'nenhuma equipe'}</small></a>`,
+                  )
+                  .join('')
+              : '<p class="dica">Nenhuma skill ainda. Crie a primeira ao lado.</p>'
+          }
+        </div>
+        <form class="empilha skill-form" data-form="skill" data-id="${esc(sk?.id ?? '')}" style="gap:16px">
+          <h2 class="titulo" style="font-size:24px;margin:0">${sk ? `Editar: ${esc(sk.nome)}` : 'Nova skill'}</h2>
+          <div class="grupo"><label for="sk-nome">Nome</label><input class="campo" id="sk-nome" name="nome" required value="${esc(sk?.nome ?? '')}" placeholder="Ex.: Revisão de PR"></div>
+          <div class="grupo"><label for="sk-desc">Quando usar ${ajuda('Uma frase dizendo em que situação a equipe deve aplicar esta skill.')}</label><input class="campo" id="sk-desc" name="descricao" value="${esc(sk?.descricao ?? '')}" placeholder="Ex.: sempre que a etapa alterar código existente"></div>
+          <div class="grupo"><label for="sk-cont">Conteúdo ${ajuda('O que a skill ensina: passos, checklist, regras, modelos de resposta, comandos. Em markdown.')}</label><textarea class="campo mono" id="sk-cont" name="conteudo" rows="14" required style="font-size:13px" placeholder="1. Leia o diff inteiro antes de comentar.&#10;2. Confira nomes, tamanho das funções e testes.&#10;3. Aponte cada problema com arquivo, linha e a correção.">${esc(sk?.conteudo ?? '')}</textarea></div>
+          <fieldset style="border:none;margin:0;padding:0" class="empilha">
+            <legend class="rotulo" style="margin-bottom:8px">Quem herda</legend>
+            <label class="check"><input type="checkbox" name="todas" ${sk?.todas ? 'checked' : ''}>Todas as equipes</label>
+            <div class="skills-equipes">${equipesTrabalho.map((e) => `<label class="check"><input type="checkbox" name="equipes" value="${esc(e.id)}" ${sk?.equipes.includes(e.id) ? 'checked' : ''}>${esc(e.nome)}</label>`).join('')}</div>
+          </fieldset>
+          <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+            <button class="btn" type="submit">Salvar skill</button>
+            ${sk ? `<button type="button" class="btn texto" data-acao="skill-remover" data-id="${esc(sk.id)}">Remover</button><span class="dica mono" style="font-size:12px">${esc(sk.caminho)}</span>` : ''}
+          </div>
+        </form>
+      </div>`;
+  },
+};
+
+// ------------------------------------------------------------------ tela: histórico de solicitações
+
+const ROTULO_ESTADO = { fila: 'na fila', planejando: 'planejando', executando: 'em andamento', esperando: 'esperando você', revisao: 'para revisar', concluida: 'concluída', cancelada: 'cancelada', falhou: 'parou com erro' };
+const telaHistorico = {
+  montar() {
+    this.busca = this.busca ?? '';
+    this.estado = this.estado ?? 'todas';
+    $('#app').innerHTML = `<div class="pagina">
+      <div class="pagina-cab"><h1>Histórico</h1></div>
+      <p class="intro">Todas as solicitações${S.proj === 'todos' ? '' : ` de ${esc(projetoNome(S.proj))}`}, da mais nova para a mais antiga. Abra uma para ver o que as equipes responderam, perguntar de novo ou reler a nota no cérebro.</p>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+        <input class="campo" id="hs-busca" type="search" placeholder="Procurar no pedido ou nas respostas…" value="${esc(this.busca)}" style="flex:1 1 320px;height:40px" aria-label="Procurar">
+        <select class="campo" id="hs-estado" style="height:40px;width:auto" aria-label="Filtrar por situação">${[
+          ['todas', 'Todas'],
+          ['concluida', 'Concluídas'],
+          ['revisao', 'Para revisar'],
+          ['andamento', 'Em andamento e na fila'],
+          ['falhou', 'Com erro'],
+          ['cancelada', 'Canceladas'],
+        ]
+          .map(([v, r]) => `<option value="${v}" ${v === this.estado ? 'selected' : ''}>${r}</option>`)
+          .join('')}</select>
+      </div>
+      <div id="hs-lista" class="hs-lista"></div>
+    </div>`;
+    $('#hs-busca').addEventListener('input', (e) => {
+      this.busca = e.target.value;
+      this.atualizar();
+    });
+    $('#hs-estado').addEventListener('change', (e) => {
+      this.estado = e.target.value;
+      this.atualizar();
+    });
+    this.atualizar();
+  },
+  atualizar() {
+    const caixa = $('#hs-lista');
+    if (!caixa) return;
+    const termo = this.busca.trim().toLowerCase();
+    const grupo = { andamento: ['fila', 'planejando', 'executando', 'esperando'] };
+    const lista = S.d.tarefas
+      .filter(doProjeto)
+      .filter((t) => this.estado === 'todas' || (grupo[this.estado] ?? [this.estado]).includes(t.estado))
+      .filter((t) => !termo || [t.texto, t.titulo, t.id, ...(t.plano ?? []).flatMap((p) => [p.resumo, p.resposta]), ...(t.conversa ?? []).flatMap((c) => [c.pergunta, c.resposta])].some((x) => String(x ?? '').toLowerCase().includes(termo)))
+      .sort((a, b) => (b.criada ?? '').localeCompare(a.criada ?? ''));
+    const data = (iso) => (iso ? new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
+    caixa.innerHTML = lista.length
+      ? lista
+          .map((t) => {
+            const equipes = [...new Set((t.plano ?? []).map((p) => equipe(p.equipe)?.nome ?? p.equipe))].filter((n) => n && n !== 'Avaliador');
+            return `<a class="hs-item" href="#/tarefa/${esc(t.id)}">
+              <div class="hs-topo"><span class="dica">${esc(t.id)} · ${esc(projetoNome(t.projetoId))} · ${data(t.criada)}</span><span class="cresce"></span><span class="selo ${corFase(t)}">${esc(ROTULO_ESTADO[t.estado] ?? t.estado)}</span></div>
+              <span class="hs-tit">${esc(t.titulo)}</span>
+              ${equipes.length || t.conversa?.length ? `<span class="dica">${equipes.length ? `Equipes: ${equipes.map(esc).join(', ')}` : ''}${t.conversa?.length ? `${equipes.length ? ' · ' : ''}${t.conversa.length} ${t.conversa.length === 1 ? 'pergunta' : 'perguntas'} depois da entrega` : ''}</span>` : ''}
+            </a>`;
+          })
+          .join('')
+      : `<p class="vazio">${termo || this.estado !== 'todas' ? 'Nada encontrado com esse filtro.' : 'Nenhuma solicitação ainda.'}</p>`;
+  },
+};
+
+// ------------------------------------------------------------------ tela: consumo
+
+const telaConsumo = {
+  montar() {
+    this.dias = this.dias ?? 7;
+    $('#app').innerHTML = `<div class="pagina" id="r-consumo"><p class="dica">Carregando…</p></div>`;
+    this.carregar();
+  },
+  atualizar() {},
+  async carregar() {
+    const c = await api('GET', `/api/consumo?dias=${this.dias}`);
+    const caixa = $('#r-consumo');
+    if (!caixa) return;
+    const mil = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1).replace('.', ',')} mi` : n >= 1000 ? `${(n / 1000).toFixed(1).replace('.', ',')} mil` : String(n));
+    const tabela = (titulo, linhas, nome = (x) => x.chave) =>
+      linhas.length
+        ? `<section class="empilha"><h2 class="rotulo">${titulo}</h2><table class="consumo-tabela"><thead><tr><th>Nome</th><th class="num">Chamadas</th><th class="num">Tokens enviados</th><th class="num">Tokens recebidos</th><th class="num">Tempo</th></tr></thead><tbody>${linhas
+            .map((x) => `<tr><td>${nome(x)}</td><td class="num">${x.chamadas}</td><td class="num">${mil(x.entrada)}</td><td class="num">${mil(x.saida)}</td><td class="num">${x.ms < 60000 ? `${Math.round(x.ms / 1000)} s` : `${Math.round(x.ms / 60000)} min`}</td></tr>`)
+            .join('')}</tbody></table></section>`
+        : '';
+    const nomeTarefa = (x) => {
+      const t = S.d.tarefas.find((y) => y.id === x.chave);
+      if (t) return `<a href="#/tarefa/${esc(t.id)}">${esc(t.id)} · ${esc(t.titulo.slice(0, 60))}</a>`;
+      const tr = S.d.treinos?.find((y) => y.id === x.chave);
+      return tr ? `<a href="#/treino/${esc(tr.id)}">${esc(tr.id)} · treino de ${esc(tr.equipeNome)}</a>` : esc(x.chave);
+    };
+    caixa.innerHTML = `
+      <div class="pagina-cab"><h1>Consumo</h1>
+        <select class="campo" id="cs-dias" style="height:38px;width:auto">${[1, 7, 30, 90].map((d) => `<option value="${d}" ${d === this.dias ? 'selected' : ''}>Últimos ${d === 1 ? 'um dia' : `${d} dias`}</option>`).join('')}</select>
+        <a class="btn texto pequeno" href="#/ias">Ajustar modelos</a></div>
+      <p class="intro">Quanto cada equipe, IA e nível de modelo gastou. Tokens são estimados (cerca de 4 caracteres por token) a partir do que foi enviado e recebido; o que a IA lê sozinha do disco não entra.${S.d.niveisModelo?.automatico === false ? ' <b>A escolha de modelo por dificuldade está desligada</b> em IAs.' : ''}</p>
+      <div class="consumo-grade">
+        <div><b>${c.chamadas}</b><span>chamadas às IAs${c.simuladas ? ` (${c.simuladas} de demonstração)` : ''}</span></div>
+        <div><b>~${mil(c.entrada + c.saida)}</b><span>tokens (${mil(c.entrada)} enviados, ${mil(c.saida)} recebidos)</span></div>
+        <div><b>${c.economia}%</b><span>mais barato que usar sempre o modelo forte ${ajuda('Compara com o mesmo volume rodando todo no modelo forte, usando a proporção típica de preço entre os níveis (rápido 1, padrão 3, forte 15).')}</span></div>
+      </div>
+      ${tabela('Por nível de modelo', c.porNivel, (x) => `<span class="selo-nivel ${esc(x.chave)}">${esc(NOME_NIVEL[x.chave] ?? x.chave)}</span>`)}
+      ${tabela('Por equipe', c.porEquipe, (x) => esc(equipe(x.chave)?.nome ?? x.chave))}
+      ${tabela('Por IA', c.porIA, (x) => esc(x.chave))}
+      ${tabela('Tarefas e treinos que mais gastaram', c.porTarefa, nomeTarefa)}
+      ${c.chamadas ? '' : '<p class="vazio">Nenhuma chamada no período. Mande uma solicitação e volte aqui.</p>'}`;
+    $('#cs-dias').addEventListener('change', (e) => {
+      this.dias = Number(e.target.value);
+      this.carregar();
+    });
+  },
+};
+
 // ------------------------------------------------------------------ tela: tarefa / entrega
 
+// "Inicializar teste": o ambiente que a equipe preparou, com link, credenciais, roteiro, arquivos e log.
+const ROTULO_TESTE = { preparando: 'Preparando', subindo: 'Subindo', corrigindo: 'Corrigindo', 'no-ar': 'No ar', pronto: 'Pronto', falhou: 'Não subiu', parado: 'Parado' };
+const htmlTeste = (t) => {
+  const x = t.teste;
+  if (!x) return '';
+  const vivo = ['preparando', 'subindo', 'corrigindo'].includes(x.estado);
+  const arquivo = (a) => {
+    const url = `/teste/${encodeURIComponent(t.id)}/${a.split(/[\\/]/).map(encodeURIComponent).join('/')}`;
+    return /\.(png|jpe?g|gif|webp|svg|avif)$/i.test(a)
+      ? `<a class="teste-img" href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="${esc(a)}" loading="lazy"><span>${esc(a)}</span></a>`
+      : `<a class="arquivo-chip" href="${url}" target="_blank" rel="noopener"><span class="arquivo-ext">${esc((a.split('.').pop() || 'arq').slice(0, 4).toUpperCase())}</span><span class="arquivo-nome"><b>${esc(a)}</b></span></a>`;
+  };
+  return `<section class="teste-caixa ${esc(x.estado)}" aria-live="polite">
+    <div class="teste-topo">
+      <span class="ponto ${vivo ? 'cm-pulso' : ''}"></span>
+      <b>Teste · ${esc(ROTULO_TESTE[x.estado] ?? x.estado)}</b>
+      <span class="dica">${esc(x.fase ?? '')}</span>
+      <span class="cresce"></span>
+      ${['no-ar', 'subindo', 'preparando'].includes(x.estado) ? `<button type="button" class="btn texto pequeno" data-acao="parar-teste" data-id="${t.id}">Parar</button>` : ''}
+      ${['falhou', 'parado', 'pronto', 'no-ar'].includes(x.estado) ? `<button type="button" class="btn texto pequeno" data-acao="testar" data-id="${t.id}">Preparar de novo</button>` : ''}
+    </div>
+    ${x.fluxo?.passos?.length ? `<ol class="teste-fluxo" aria-label="Fluxo de correção ${x.fluxo.ciclo}">${x.fluxo.passos.map((p) => `<li class="${esc(p.estado)}"><span class="teste-fluxo-marca">${p.estado === 'ok' ? '✓' : p.estado === 'falhou' ? '✗' : p.estado === 'atual' ? '' : ''}</span><span class="empilha" style="gap:1px;min-width:0"><b>${esc(p.nome)}</b><span class="dica">${esc(p.equipe)}${p.resumo ? ` · ${esc(p.resumo)}` : ''}</span></span></li>`).join('')}</ol>` : ''}
+    ${x.url && x.estado === 'no-ar' ? `<a class="btn teste-abrir" href="${esc(x.url)}" target="_blank" rel="noopener">Abrir ${esc(x.url.replace(/^https?:\/\//, '').slice(0, 60))}</a>` : ''}
+    ${x.resumo ? `<p class="dica" style="margin:0">${esc(x.resumo)}</p>` : ''}
+    ${x.credenciais?.length ? `<div class="teste-cred">${x.credenciais.map((c) => `<span class="rotulo">${esc(c.rotulo)}</span><code>${esc(c.valor)}</code><button type="button" class="btn texto pequeno" data-acao="copiar" data-valor="${esc(c.valor)}">Copiar</button>`).join('')}</div>` : ''}
+    ${x.passos?.length ? `<div><span class="rotulo">O que testar</span><ol class="teste-passos">${x.passos.map((p) => `<li>${esc(p)}</li>`).join('')}</ol></div>` : ''}
+    ${x.tipo === 'arquivos' || x.tipo === 'estatico' ? `<div class="fotos teste-arquivos">${(x.arquivos ?? []).map(arquivo).join('')}</div>` : ''}
+    ${x.estado === 'falhou' ? `<div class="linha" style="gap:10px;flex-wrap:wrap"><button type="button" class="btn contorno pequeno" data-acao="teste-corrigir" data-id="${t.id}">Pedir para a equipe corrigir</button><span class="dica">Gestor faz a triagem, a equipe e a Debug diagnosticam juntas, a equipe corrige, Código limpo revisa e o avaliador confere.</span></div>` : ''}
+    ${x.historico?.length ? `<details><summary class="dica">Correções feitas para o teste subir (${x.historico.length})</summary><ul class="teste-passos">${x.historico.map((h) => `<li><b>${esc(h.motivo)}</b><br>${esc(h.correcao)}</li>`).join('')}</ul></details>` : ''}
+    <details ${x.estado === 'falhou' || vivo ? 'open' : ''}><summary class="dica">Log do teste</summary><div class="log" id="r-teste-log" style="max-height:260px">${htmlLog(`teste:${t.id}`)}</div></details>
+  </section>`;
+};
+
 const telaTarefa = {
+  terminal(eq) {
+    if (eq !== `teste:${this.id}`) return;
+    const el = $('#r-teste-log');
+    if (!el) return;
+    const fim = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
+    el.innerHTML = htmlLog(eq);
+    if (fim) rolarLog(el);
+  },
   montar(id) {
     this.id = id;
     this.nota = '';
@@ -767,9 +1159,13 @@ const telaTarefa = {
     if (t.estado === 'revisao') {
       acoes.push(`<button type="button" class="btn" data-acao="aprovar" data-id="${t.id}">Aprovar entrega</button>`);
       acoes.push(`<p class="dica">Aprovar conclui a tarefa e valida no cérebro o que as equipes aprenderam. ${t.branch ? `O merge da branch ${esc(t.branch)} fica com você.` : ''}</p>`);
+      if (t.avaliacao?.aprovado === false) acoes.push(`<button type="button" class="btn contorno" data-acao="corrigir" data-id="${t.id}" data-dica="A equipe recebe o que o avaliador apontou, corrige (ou contesta com evidência) e o avaliador confere de novo. Volta para você só no fim.">Mandar a equipe corrigir</button>`);
       if (!S.devolvendo) acoes.push(`<button type="button" class="btn texto" data-acao="abrir-devolver">Devolver para as equipes</button>`);
     }
-    if (['executando', 'planejando', 'esperando'].includes(t.estado)) acoes.push(`<button type="button" class="btn contorno" data-acao="cancelar" data-id="${t.id}">Cancelar tarefa</button>`);
+    if (['revisao', 'concluida'].includes(t.estado) && !['preparando', 'subindo', 'corrigindo'].includes(t.teste?.estado)) acoes.unshift(`<button type="button" class="btn" data-acao="testar" data-id="${t.id}" data-dica="A equipe que fez prepara tudo (dependências, build, dados e usuário de teste) e o app sobe aqui: você recebe o link, as credenciais e o roteiro para testar antes de aprovar.">${t.teste ? 'Preparar o teste de novo' : 'Inicializar teste'}</button>`);
+    acoes.push(`<a class="btn contorno" href="#/comunicacao/${esc(t.id)}" data-dica="Grafo ao vivo (2D ou 3D) do que o gestor, as equipes, as IAs e o avaliador estão mandando entre si nesta tarefa.">Ver comunicação</a>`);
+    if (t.estado === 'pausada') acoes.push(`<button type="button" class="btn" data-acao="retomar" data-id="${t.id}" data-dica="Tenta agora, sem esperar a cota renovar (por exemplo, depois de entrar em outra conta).">Tentar agora</button>`);
+    if (['executando', 'planejando', 'esperando', 'pausada'].includes(t.estado)) acoes.push(`<button type="button" class="btn contorno" data-acao="cancelar" data-id="${t.id}">Cancelar tarefa</button>`);
     if (['falhou', 'cancelada'].includes(t.estado)) acoes.push(`<button type="button" class="btn" data-acao="retomar" data-id="${t.id}">Tentar de novo de onde parou</button>`);
     if (['fila', 'falhou', 'cancelada', 'concluida'].includes(t.estado)) acoes.push(`<button type="button" class="btn texto" data-acao="remover-tarefa" data-id="${t.id}" data-voltar="1">Remover</button>`);
 
@@ -778,13 +1174,18 @@ const telaTarefa = {
         <span class="dica" style="font-size:14px">${esc(projetoNome(t.projetoId))} · ${esc(t.id)}${t.planejadaPor ? ` · plano de ${esc(t.planejadaPor)}` : ''}</span>
         <h1 class="titulo" style="font-size:40px;letter-spacing:-.4px">${esc(t.titulo)}</h1>
         <p class="frase ${corFase(t)}">${esc(t.fase)}</p>
+        ${htmlTeste(t)}
+        ${t.estado === 'pausada' ? `<div class="linha" style="gap:10px;align-items:center;flex-wrap:wrap"><button type="button" class="btn" data-acao="retomar" data-id="${t.id}">Tentar agora</button><span class="dica">Se a cota já voltou, ou você entrou em outra conta, continua de onde parou. Se uma IA ainda estiver sem cota, o app tenta outro modelo e outra conta antes de pausar de novo.</span></div>` : ''}
       </div>
       ${t.pergunta ? `<div class="perguntas" style="margin-top:0">${htmlPergunta(t, { mostrarTarefa: false })}</div>` : ''}
       <div class="entrega">
         <div class="principal">
           <section class="empilha"><h2 class="rotulo">Pedido</h2><p style="margin:0;font-family:var(--serif);font-size:19px;line-height:1.5;white-space:pre-wrap">${esc(t.texto)}</p>
             ${t.fotos?.length ? `<div class="fotos">${t.fotos.map((f) => `<a class="foto" href="${urlAnexo(f)}" target="_blank" rel="noopener"><img src="${urlAnexo(f)}" alt="Anexo ${esc(f)}"></a>`).join('')}</div>` : ''}
+            ${(t.arquivos ?? []).filter((a) => !/^image\//.test(a.tipo)).length ? `<div class="fotos">${t.arquivos.filter((a) => !/^image\//.test(a.tipo)).map((a) => `<a class="arquivo-chip" href="${urlAnexo(a.arquivo)}" target="_blank" rel="noopener" download="${esc(a.nome)}"><span class="arquivo-ext">${esc((a.nome.split('.').pop() || 'arq').slice(0, 4).toUpperCase())}</span><span class="arquivo-nome"><b>${esc(a.nome)}</b><small>${tamanhoLegivel(a.tamanho)}</small></span></a>`).join('')}</div>` : ''}
           </section>
+          ${htmlRespostas(t)}
+          ${htmlConversa(t)}
           <section class="empilha"><h2 class="rotulo">Como o gestor dividiu</h2>${htmlPassos(t, { detalhado: true })}</section>
           <section class="empilha"><h2 class="rotulo">Nota no vault <span class="mono" style="font-weight:400">10-tarefas/${esc(t.id)}.md</span></h2><pre class="nota" id="r-nota">${esc(this.nota || '…')}</pre></section>
         </div>
@@ -792,12 +1193,14 @@ const telaTarefa = {
           ${
             t.avaliacao
               ? `<div class="empilha"><h2 class="rotulo">O avaliador conferiu ${ajuda('Critérios que o gestor tirou do seu pedido. O avaliador confere cada um antes de a entrega chegar a você.')}</h2><ul class="checks">${(t.avaliacao.criterios.length ? t.avaliacao.criterios : [{ texto: t.avaliacao.resumo, ok: t.avaliacao.aprovado }])
-                  .map((c) => `<li><span class="${c.ok ? 'ok' : 'erro'}" aria-hidden="true">${c.ok ? '✓' : '✗'}</span><span>${esc(c.texto)}</span></li>`)
+                  .map((c) => `<li><span class="${c.ok ? 'ok' : 'erro'}" aria-hidden="true">${c.ok ? '✓' : '✗'}</span><span>${esc(c.texto)}${c.obs ? `<small class="dica" style="display:block">${esc(c.obs)}</small>` : ''}</span></li>`)
                   .join('')}</ul></div>`
               : t.criterios?.length
                 ? `<div class="empilha"><h2 class="rotulo">O avaliador vai conferir</h2><ul class="checks">${t.criterios.map((c) => `<li><span class="dica" aria-hidden="true">○</span><span>${esc(c)}</span></li>`).join('')}</ul></div>`
                 : ''
           }
+          ${t.avaliacao?.resumo && t.avaliacao.criterios.length ? `<p class="dica" style="margin:-18px 0 0">${esc(t.avaliacao.resumo)}</p>` : ''}
+          <div class="empilha" id="r-consumo-tarefa"></div>
           ${t.branch ? `<div class="empilha"><h2 class="rotulo">Worktree</h2><span class="mono acento">${esc(t.branch)}</span><span class="dica">${esc(t.cwd)}</span></div>` : ''}
           <div class="empilha">${acoes.join('')}
             ${
@@ -822,12 +1225,101 @@ const telaTarefa = {
       </div>`;
     const focar = $('#motivo');
     if (focar && forcar) focar.focus();
+    this.carregarConsumo(t);
   },
+  // Quanto esta tarefa gastou, por modelo (estimado). Só busca de novo quando a tarefa mudou.
+  async carregarConsumo(t) {
+    const chave = `${t.id}:${t.atualizada}`;
+    const el = $('#r-consumo-tarefa');
+    if (!el) return;
+    if (this.consumoChave === chave && this.consumoHtml) {
+      el.innerHTML = this.consumoHtml;
+      return;
+    }
+    this.consumoChave = chave;
+    try {
+      const c = await api('GET', `/api/consumo?tarefaId=${encodeURIComponent(t.id)}&dias=90`);
+      if (!c.chamadas) return;
+      const mil = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1).replace('.', ',')} mil` : String(n));
+      this.consumoHtml = `<h2 class="rotulo">Consumo desta tarefa ${ajuda('Tokens estimados (cerca de 4 caracteres por token) do que foi enviado e recebido. O que a IA lê sozinha do disco não entra.')}</h2>
+        <span style="font-size:14px">${c.chamadas} chamadas · ~${mil(c.entrada + c.saida)} tokens</span>
+        <span class="dica">${c.porNivel.map((n) => `${esc(NOME_NIVEL[n.chave] ?? n.chave)}: ${n.chamadas}`).join(' · ')}${c.economia ? ` · ${c.economia}% mais barato que usar só o modelo forte` : ''}</span>`;
+      const atual = $('#r-consumo-tarefa');
+      if (atual) atual.innerHTML = this.consumoHtml;
+    } catch {}
+  },
+};
+
+// Busca o estado atual de uma tarefa no servidor e redesenha (quando a tela ficou para trás).
+const recarregarTarefa = async (id) => {
+  try {
+    const d = await api('GET', '/api/estado');
+    const t = d.tarefas.find((x) => x.id === id);
+    if (t) upsert(S.d.tarefas, t);
+    atualizar();
+  } catch {}
+};
+
+const NOME_NIVEL = { rapido: 'rápido', padrao: 'padrão', forte: 'forte', 'sem nível': 'sem nível' };
+const seloNivel = (p) => (p.nivel ? `<span class="selo-nivel ${p.nivel}" data-dica="${esc(`Modelo ${NOME_NIVEL[p.nivel]}${p.modelo ? ` (${p.modelo})` : ''}. ${p.nivelMotivo || ''}`)}">${NOME_NIVEL[p.nivel]}</span>` : '');
+
+// O que cada equipe respondeu, na íntegra, para você revisar sem abrir a nota.
+const htmlRespostas = (t) => {
+  const todos = (t.plano ?? []).filter((p) => p.equipe !== 'avaliador' && (p.resumo || p.resposta));
+  // Depois de uma correção, a última entrega da equipe é a que vale; as anteriores ficam recolhidas embaixo dela.
+  const passos = todos.filter((p, i) => !todos.slice(i + 1).some((q) => q.equipe === p.equipe && q.correcao));
+  const antes = (p) => todos.filter((q) => q.equipe === p.equipe && q !== p && todos.indexOf(q) < todos.indexOf(p));
+  if (!passos.length) return '';
+  return `<section class="empilha"><h2 class="rotulo">O que as equipes responderam</h2>${passos
+    .map(
+      (p) => `<article class="resposta-equipe">
+        <header><b>${esc(equipe(p.equipe)?.nome ?? p.equipe)}</b><span class="dica">${esc(p.ia ?? '')}</span>${seloNivel(p)}<span class="cresce"></span><button type="button" class="btn texto pequeno" data-acao="questionar-equipe" data-equipe="${esc(p.equipe)}">Questionar</button></header>
+        ${p.resumo ? `<p class="resposta-resumo">${esc(p.resumo)}</p>` : ''}
+        ${p.resposta ? `<div class="manual resposta-corpo">${markdown(p.resposta).html}</div>` : ''}
+        ${p.arquivos?.length ? `<p class="dica">Arquivos: ${p.arquivos.map((a) => `<code>${esc(a)}</code>`).join(', ')}</p>` : ''}
+        ${p.correcao ? `<p class="dica">Versão corrigida depois do avaliador${antes(p).length ? ` · ${antes(p).length} ${antes(p).length === 1 ? 'versão anterior' : 'versões anteriores'} abaixo` : ''}.</p>` : ''}
+        ${antes(p).map((q, k) => `<details><summary class="dica">Versão ${k + 1}, reprovada pelo avaliador</summary><p class="dica">${esc(q.resumo ?? '')}</p>${q.resposta ? `<div class="manual resposta-corpo">${markdown(q.resposta).html}</div>` : ''}</details>`).join('')}
+        ${p.anterior ? `<details><summary class="dica">Primeira versão (modelo ${esc(NOME_NIVEL[p.anterior.nivel] ?? '')}), reprovada pelo avaliador</summary><p class="dica">${esc(p.anterior.resumo ?? '')}</p>${p.anterior.resposta ? `<div class="manual resposta-corpo">${markdown(p.anterior.resposta).html}</div>` : ''}</details>` : ''}
+      </article>`,
+    )
+    .join('')}</section>`;
+};
+
+// Perguntas que você reencaminhou depois da entrega, com as respostas, e a caixa para mandar outra.
+const htmlConversa = (t) => {
+  if (!t.plano?.length || ['fila', 'planejando'].includes(t.estado)) return '';
+  const destinos = [...new Set(t.plano.map((p) => p.equipe).filter((id) => !id.startsWith('nova:')))];
+  const para = S.questionarPara && (destinos.includes(S.questionarPara) || S.questionarPara === 'gestor') ? S.questionarPara : destinos.find((d) => d !== 'avaliador') ?? 'gestor';
+  const itens = (t.conversa ?? [])
+    .map(
+      (c) => `<div class="conversa-item">
+        <p class="conversa-pergunta"><span class="dica">Você → ${esc(c.paraNome ?? c.para)}</span>${esc(c.pergunta)}</p>
+        ${
+          c.estado === 'respondendo'
+            ? `<p class="dica conversa-espera">${esc(c.paraNome ?? c.para)} está respondendo…</p>`
+            : c.estado === 'falhou'
+              ? `<p class="dica erro">Não respondeu: ${esc(c.erro ?? '')}</p>`
+              : `<div class="conversa-resposta"><span class="dica">${esc(c.paraNome ?? c.para)}${c.ia ? ` · ${esc(c.ia)}` : ''}</span>${seloNivel(c)}<div class="manual resposta-corpo">${markdown(c.resposta ?? '').html}</div>${c.arquivos?.length ? `<p class="dica">Alterou: ${c.arquivos.map((a) => `<code>${esc(a)}</code>`).join(', ')}</p>` : ''}</div>`
+        }
+      </div>`,
+    )
+    .join('');
+  return `<section class="empilha" id="r-conversa"><h2 class="rotulo">Perguntar ou questionar ${ajuda('Mande uma dúvida ou um questionamento sobre a entrega para uma equipe (ou para o gestor). A resposta aparece aqui, sem a tarefa voltar para a fila. Se a equipe concordar que errou, ela corrige.')}</h2>
+    ${itens}
+    <form class="empilha conversa-form" data-form="questionar" data-id="${t.id}">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><label for="q-para" class="dica" style="font-size:14px">Para</label>
+        <select class="campo" id="q-para" name="para" style="height:38px;width:auto;min-width:200px">${[...destinos.filter((d) => d !== 'avaliador'), 'avaliador', 'gestor']
+          .filter((d, i, a) => a.indexOf(d) === i && (d === 'gestor' || destinos.includes(d)))
+          .map((d) => `<option value="${esc(d)}" ${d === para ? 'selected' : ''}>${esc(d === 'gestor' ? 'Gestor (visão geral da tarefa)' : equipe(d)?.nome ?? d)}</option>`)
+          .join('')}</select></div>
+      <textarea id="q-texto" name="texto" rows="3" class="pedido menor" placeholder="Ex.: De onde veio esse número? Ou: o item 2 está errado, a lei mudou em 2025." required></textarea>
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><button class="btn" type="submit">Enviar pergunta</button>${t.estado === 'revisao' ? '<span class="dica">Se for preciso refazer tudo, use Devolver para as equipes.</span>' : ''}</div>
+    </form></section>`;
 };
 
 // ------------------------------------------------------------------ tela: máquinas (SSH)
 
-const NOMES_COMANDO = { claude: 'Claude Code', agy: 'Antigravity CLI', gemini: 'Gemini CLI', codex: 'Codex CLI', ollama: 'Ollama', node: 'Node.js', git: 'git' };
+const NOMES_COMANDO = { claude: 'Claude Code', agy: 'Antigravity CLI', codex: 'Codex CLI', ollama: 'Ollama', node: 'Node.js', git: 'git' };
 
 const telaMaquinas = {
   montar() {
@@ -859,7 +1351,7 @@ const telaMaquinas = {
         .map((m) => {
           const [cor, rotulo] = m.estado === 'ok' ? ['var(--ok)', 'conectada'] : m.estado === 'erro' ? ['var(--erro)', 'falhou'] : m.estado === 'testando' ? ['var(--acento)', 'testando…'] : ['#4a4a55', 'não testada'];
           const usado = S.d.projetos.filter((p) => p.maquinaId === m.id).map((p) => p.nome);
-          const ias = (m.comandos ?? []).filter((c) => ['claude', 'agy', 'gemini', 'codex', 'ollama'].includes(c));
+          const ias = (m.comandos ?? []).filter((c) => ['claude', 'agy', 'codex', 'ollama'].includes(c));
           const faltam = ['claude', 'agy', 'codex', 'ollama'].filter((c) => m.estado === 'ok' && !ias.includes(c));
           return `<div class="linha">
             <span class="ponto" style="background:${cor}"></span>
@@ -1001,8 +1493,7 @@ const terminalMaquina = async (url, titulo, descricao) => {
 
 const SOBRE_IA = {
   claude: 'Da Anthropic. Funciona com a assinatura Pro ou Max. Forte em código, segurança e planejamento.',
-  antigravity: 'Do Google, com a sua conta Google (tem plano gratuito). Substituiu o Gemini CLI para contas pessoais. Bom para pesquisa e código.',
-  gemini: 'Do Google. Desde 18/06/2026 não aceita mais login com conta pessoal do Google: só funciona com chave de API paga. Com a sua conta Google, use o Antigravity.',
+  antigravity: 'Do Google, com a sua conta Google (tem plano gratuito). Bom para pesquisa e código.',
   codex: 'Da OpenAI. Usa a sua conta do ChatGPT. Bom para implementar código.',
   ollama: 'Roda modelos no seu computador, sem internet e sem cota. Pede uma máquina boa; o modelo ocupa vários GB.',
   simulado: 'Respostas de exemplo, sem nenhuma IA real. Só para conhecer o app.',
@@ -1034,7 +1525,7 @@ const telaComecar = {
     this.render();
   },
   opcoes() {
-    const ordem = ['claude', 'antigravity', 'codex', 'gemini', 'ollama', 'simulado'];
+    const ordem = ['claude', 'antigravity', 'codex', 'ollama', 'simulado'];
     return S.d.ias.filter((i) => i.tipo !== 'shell' && i.tipo !== 'custom').sort((a, b) => ordem.indexOf(a.tipo) - ordem.indexOf(b.tipo));
   },
   instalada: (i) => i.tipo === 'simulado' || i.status === 'pronto',
@@ -1188,6 +1679,8 @@ const telaComecar = {
     if (!fim || fim.codigo !== 0) this.falhas.add(i.id);
     else this.falhas.delete(i.id);
     this.render();
+    // Instalou: já abre o login, sem precisar procurar o botão.
+    if (fim?.codigo === 0 && S.d.planos[i.tipo]?.entrar) await entrarIA(i).catch(() => {});
   },
 };
 
@@ -1351,6 +1844,7 @@ const rotaAtual = () => {
   if (nome === 'terminais') return { nome, tela: telaTerminais };
   if (nome === 'livre') return { nome, tela: telaCanvas };
   if (nome === 'cerebro') return { nome, tela: telaCerebro };
+  if (nome === 'comunicacao') return { nome, arg, tela: telaComunicacao };
   if (nome === 'backup') return { nome: 'ajuda', tela: telaBackup };
   if (nome === 'treinar' && arg) return { nome: 'equipes', arg, tela: treinoTelas.telaTreinar };
   if (nome === 'treino' && arg) return { nome: 'equipes', arg, tela: treinoTelas.telaTreino };
@@ -1360,6 +1854,9 @@ const rotaAtual = () => {
   if (nome === 'maquinas') return { nome, tela: telaMaquinas };
   if (nome === 'equipes') return { nome, tela: telaEquipes };
   if (nome === 'ias') return { nome, tela: telaIAs };
+  if (nome === 'consumo') return { nome: 'ias', tela: telaConsumo };
+  if (nome === 'historico') return { nome: 'inicio', tela: telaHistorico };
+  if (nome === 'skills') return { nome: 'equipes', arg, tela: telaSkills };
   return { nome: 'inicio', tela: telaInicio };
 };
 
@@ -1423,6 +1920,22 @@ const aplicar = (e) => {
       upsert(d.treinos, e.treino);
       if (montada === treinoTelas.telaTreino && treinoTelas.telaTreino.id === e.treino.id) treinoTelas.telaTreino.redesenhar();
       return atualizar();
+    case 'skills':
+      api('GET', '/api/skills')
+        .then((l) => {
+          S.d.skills = l.map(({ conteudo, ...k }) => ({ ...k, tamanho: conteudo.length }));
+          if (montada === telaSkills) telaSkills.carregar();
+          else atualizar();
+        })
+        .catch(() => {});
+      return;
+    case 'cerebro.uso':
+      if (montada === telaCerebro) telaCerebro.uso(e);
+      return;
+    case 'comunicacao':
+      if (montada === telaComunicacao) telaComunicacao.evento(e.ev);
+      else if (montada === telaCerebro) telaCerebro.comunicacao(e.ev);
+      return;
     case 'treino.removido':
       d.treinos = d.treinos.filter((t) => t.id !== e.id);
       return atualizar();
@@ -1472,6 +1985,8 @@ const aplicar = (e) => {
     case 'avulso.fim':
       avisarFim(e);
       return atualizar();
+    case 'ia.teste':
+      return toast(e.ok ? `${e.nome}: conta testada e em uso.` : `${e.nome} não passou no teste: ${e.motivo}`, e.ok ? '' : 'erro');
     case 'aviso':
       return toast(e.texto, 'erro');
     case 'terminal': {
@@ -1505,7 +2020,7 @@ const conectar = () => {
     S.conectado = false;
     atualizarTopo();
     if (ev.code === 4401) {
-      const novo = prompt('Token de acesso do Singularize Orquestrador:');
+      const novo = prompt('Token de acesso do Singularize:');
       if (novo) localStorage.setItem('orq.token', novo);
     }
     setTimeout(conectar, 1500);
@@ -1516,17 +2031,26 @@ const conectar = () => {
 
 const ler = (form) => Object.fromEntries(new FormData(form).entries());
 
-const lerFotos = (arquivos) =>
-  Promise.all(
-    [...arquivos].map(
-      (f) =>
-        new Promise((ok) => {
-          const r = new FileReader();
-          r.onload = () => ok({ nome: f.name, dados: r.result });
-          r.readAsDataURL(f);
-        }),
-    ),
+const tamanhoLegivel = (n) => (!n ? '' : n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1).replace('.', ',')} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+const LIMITE_ANEXO = 50 * 1024 * 1024;
+// Lê qualquer arquivo para enviar junto com a tarefa. Acima de 50 MB fica de fora (com aviso).
+const lerFotos = async (arquivos) => {
+  const lista = [...arquivos];
+  const grandes = lista.filter((f) => f.size > LIMITE_ANEXO);
+  if (grandes.length) toast(`${grandes.map((f) => f.name).join(', ')}: acima de 50 MB, não foi anexado.`);
+  return Promise.all(
+    lista
+      .filter((f) => f.size <= LIMITE_ANEXO)
+      .map(
+        (f) =>
+          new Promise((ok) => {
+            const r = new FileReader();
+            r.onload = () => ok({ nome: f.name, tipo: f.type || 'application/octet-stream', tamanho: f.size, dados: r.result });
+            r.readAsDataURL(f);
+          }),
+      ),
   );
+};
 
 const enviarTarefa = async () => {
   const campo = $('#pedido');
@@ -1538,7 +2062,8 @@ const enviarTarefa = async () => {
     return toast('Crie um projeto primeiro.');
   }
   if (!texto) return campo.focus();
-  const t = await api('POST', '/api/tarefas', { projetoId: alvo.id, texto, fotos: S.fotos });
+  if (S.fotos.length > 20) return toast('No máximo 20 arquivos por tarefa.');
+  const t = await api('POST', '/api/tarefas', { projetoId: alvo.id, texto, arquivos: S.fotos });
   S.draft = '';
   S.fotos = [];
   campo.value = '';
@@ -1557,6 +2082,37 @@ const moverNaFila = (id, delta) => {
 
 const acoes = {
   ...treinoTelas.acoes,
+  'skill-nova': () => {
+    location.hash = '#/skills';
+    telaSkills.editando = null;
+    telaSkills.desenhar();
+  },
+  'skill-remover': async (b) => {
+    if (!(await perguntar({ titulo: 'Remover esta skill?', texto: 'As equipes deixam de herdá-la. A nota sai do cérebro (40-skills).', sim: 'Remover', nao: 'Cancelar' }))) return;
+    await api('DELETE', `/api/skills/${encodeURIComponent(b.dataset.id)}`);
+    location.hash = '#/skills';
+    toast('Skill removida.');
+  },
+  'eq-criar-e-treinar': (b) => {
+    S.treinarAoCriar = true;
+    return formularios['proposta-equipe'](b.closest('form')).catch((e) => toast(e.message));
+  },
+  'eq-criar-sem-treino': (b) => {
+    S.treinarAoCriar = false;
+    return formularios['proposta-equipe'](b.closest('form')).catch((e) => toast(e.message));
+  },
+  'eq-descartar-analise': () => {
+    S.analiseEquipe = null;
+    desenharAnalise();
+  },
+  'eq-ajustar-existente': (b) => {
+    S.abertos.add(`eq-${b.dataset.id}`);
+    S.analiseEquipe = null;
+    desenharAnalise();
+    telaEquipes.atualizar(true);
+    setTimeout(() => document.querySelector(`#i-${CSS.escape(b.dataset.id)}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+    toast('Ajuste o foco e as instruções desta equipe e salve.');
+  },
   'eq-especializar': (b) => {
     const f = $('[data-form="equipe"]');
     f.querySelector('[name="familia"]').value = b.dataset.familia ?? '';
@@ -1621,6 +2177,32 @@ const acoes = {
     await instalarIA(ia);
   },
   'ia-entrar': (b) => entrarIA(S.d.ias.find((i) => i.id === b.dataset.id)),
+  'conta-entrar': async (b) => {
+    const ia = S.d.ias.find((i) => i.id === b.dataset.id);
+    const conta = ia?.contas?.find((c) => c.id === b.dataset.conta);
+    const plano = S.d.planos[ia.tipo];
+    const { sessao, comando } = await api('POST', `/api/ias/${ia.id}/entrar?conta=${encodeURIComponent(b.dataset.conta)}`);
+    return abrirTerminal({ titulo: `Entrar na conta "${conta?.nome ?? ''}": ${ia.nome}`, descricao: `Faça o login com a conta que você quer usar aqui. Ela fica guardada numa pasta só desta conta. ${plano?.entrar?.dica ?? ''}`, comando, sessao, token, esc });
+  },
+  'conta-testar': async (b) => {
+    b.textContent = 'Testando…';
+    try {
+      const r = await api('POST', `/api/ias/${b.dataset.id}/testar?conta=${encodeURIComponent(b.dataset.conta)}`);
+      if (r.ok) toast(`A conta respondeu em ${(r.ms / 1000).toFixed(1)} s.`);
+      else mostrarFalhaTeste(S.d.ias.find((i) => i.id === b.dataset.id), r);
+    } finally {
+      b.textContent = 'Testar';
+    }
+  },
+  'conta-liberar': async (b) => {
+    await api('PATCH', `/api/ias/${b.dataset.id}/contas/${encodeURIComponent(b.dataset.conta)}`, { liberar: true });
+    toast('Conta liberada.');
+  },
+  'conta-remover': async (b) => {
+    if (!(await perguntar({ titulo: 'Remover esta conta do rodízio?', texto: 'A IA deixa de usar esta conta. O login e a pasta de perfil continuam no computador.', sim: 'Remover', nao: 'Cancelar' }))) return;
+    await api('DELETE', `/api/ias/${b.dataset.id}/contas/${encodeURIComponent(b.dataset.conta)}`);
+    toast('Conta removida.');
+  },
   'trocar-pasta-padrao': async () => {
     const escolhida = window.singularize ? await escolherPastaNativa(S.d.geral.pastaProjetos) : prompt('Pasta padrão dos projetos:', S.d.geral.pastaProjetos ?? '');
     if (!escolhida) return;
@@ -1699,10 +2281,37 @@ const acoes = {
     await api('DELETE', `/api/tarefas/${b.dataset.id}`);
     if (b.dataset.voltar) location.hash = '#/';
   },
-  responder: (b) => api('POST', `/api/tarefas/${b.dataset.id}/responder`, { resposta: b.dataset.resposta }),
+  responder: async (b) => {
+    b.blur();
+    b.disabled = true;
+    try {
+      await api('POST', `/api/tarefas/${b.dataset.id}/responder`, { resposta: b.dataset.resposta });
+      toast('Resposta enviada. A equipe continua.');
+    } catch (e) {
+      await recarregarTarefa(b.dataset.id);
+      throw e;
+    }
+  },
   aprovar: async (b) => {
     await api('POST', `/api/tarefas/${b.dataset.id}/aprovar`);
     toast('Entrega aprovada. Os aprendizados foram promovidos no vault.');
+  },
+  'questionar-equipe': (b) => {
+    S.questionarPara = b.dataset.equipe;
+    const sel = $('#q-para');
+    if (sel) sel.value = b.dataset.equipe;
+    $('#r-conversa')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setTimeout(() => $('#q-texto')?.focus(), 300);
+  },
+  'tv-recolher': () => {
+    const aberto = $('#r-treinos-vivo .tv-cab')?.getAttribute('aria-expanded') === 'true';
+    gravarLocal('orq.tv.recolhido', aberto ? '1' : '0');
+    treinosVivos();
+  },
+  'tv-fechar': (b) => {
+    const atuais = (lerLocal('orq.tv.fechados', '') || '').split(',').filter(Boolean).slice(-50);
+    gravarLocal('orq.tv.fechados', [...atuais, b.dataset.id].join(','));
+    treinosVivos();
   },
   'abrir-devolver': () => {
     S.devolvendo = !S.devolvendo;
@@ -1739,6 +2348,35 @@ const acoes = {
     await api('POST', `/api/backup/automaticos/${encodeURIComponent(b.dataset.nome)}/restaurar`);
     toast('Restaurado.');
     await carregar();
+  },
+  testar: async (b) => {
+    await api('POST', `/api/tarefas/${b.dataset.id}/teste`).catch((e) => toast(e.message, 'erro'));
+    toast('A equipe está preparando o ambiente de teste. O link aparece aqui quando estiver no ar.');
+  },
+  'parar-teste': (b) => api('POST', `/api/tarefas/${b.dataset.id}/teste/parar`).catch((e) => toast(e.message, 'erro')),
+  'teste-corrigir': async (b) => {
+    b.disabled = true;
+    b.textContent = 'Mandando para a equipe…';
+    await api('POST', `/api/tarefas/${b.dataset.id}/teste/corrigir`).catch((e) => toast(e.message, 'erro'));
+    toast('A equipe está corrigindo. O quadro do teste mostra o andamento e o app sobe de novo sozinho.');
+  },
+  copiar: async (b) => {
+    try {
+      await navigator.clipboard.writeText(b.dataset.valor);
+      toast('Copiado.');
+    } catch {
+      toast(b.dataset.valor);
+    }
+  },
+  corrigir: async (b) => {
+    await api('POST', `/api/tarefas/${b.dataset.id}/corrigir`).catch((e) => toast(e.message, 'erro'));
+    toast('A equipe vai corrigir o que o avaliador apontou. Volta para você quando o avaliador conferir.');
+    telaTarefa.atualizar(true);
+  },
+  'salvar-comandos': async () => {
+    const r = await api('PUT', '/api/ajustes/comandos', { texto: $('#r-comandos').value });
+    S.d.comandosLiberados = r.lista;
+    toast(r.lista.length ? `${r.lista.length} comandos liberados para as IAs.` : 'Nenhum comando liberado: as IAs não rodam nada no terminal.');
   },
   retomar: async (b) => {
     b.disabled = true;
@@ -1842,7 +2480,23 @@ const formularios = {
     const resposta = f.elements.resposta.value.trim();
     if (!resposta) return;
     f.elements.resposta.blur();
-    await api('POST', `/api/tarefas/${f.dataset.id}/responder`, { resposta });
+    try {
+      await api('POST', `/api/tarefas/${f.dataset.id}/responder`, { resposta });
+      toast('Resposta enviada. A equipe continua.');
+    } catch (e) {
+      // A pergunta já tinha sido respondida (ou a tarefa andou): atualiza a tela com o estado real.
+      await recarregarTarefa(f.dataset.id);
+      throw e;
+    }
+  },
+  questionar: async (f) => {
+    const texto = f.elements.texto.value.trim();
+    if (!texto) return;
+    S.questionarPara = f.elements.para.value;
+    await api('POST', `/api/tarefas/${f.dataset.id}/questionar`, { para: f.elements.para.value, texto });
+    f.elements.texto.value = '';
+    document.activeElement?.blur();
+    toast('Pergunta enviada. A resposta aparece aqui.');
   },
   devolver: async (f) => {
     await api('POST', `/api/tarefas/${f.dataset.id}/devolver`, { motivo: f.elements.motivo.value });
@@ -1858,16 +2512,68 @@ const formularios = {
     toast('Máquina adicionada. Testando a conexão…');
     acoes['mq-testar']({ dataset: { id: m.id } });
   },
+  // Nova equipe: primeiro o gestor analisa; você confirma na proposta (criarProposta).
   equipe: async (f) => {
     const dados = ler(f);
-    const e = await api('POST', '/api/equipes', { ...dados, aprovacao: !!dados.aprovacao });
+    S.analiseEquipe = { dados, carregando: true };
+    desenharAnalise();
+    try {
+      S.analiseEquipe = { dados, proposta: await api('POST', '/api/equipes/analisar', dados) };
+    } catch (e) {
+      S.analiseEquipe = null;
+      toast(e.message);
+    }
+    desenharAnalise();
+  },
+  'conta-nova': async (f) => {
+    const dados = ler(f);
+    const { login, ...ia } = await api('POST', `/api/ias/${f.dataset.id}/contas`, { nome: dados.nome, env: dados.env, perfil: !!dados.perfil });
+    upsert(S.d.ias, ia);
     f.reset();
-    if (dados.treinar) {
-      upsert(S.d.equipes, e);
+    telaIAs.atualizar(true);
+    const nova = ia.contas.at(-1);
+    // Perfil separado: o login da conta nova já abre; ao terminar, o app testa e ela entra no rodízio.
+    if (login) {
+      const plano = S.d.planos[ia.tipo];
+      return abrirTerminal({ titulo: `Entrar na conta "${nova?.nome ?? ''}": ${ia.nome}`, descricao: `Faça o login com a outra conta. Ela fica guardada numa pasta só dela. ${plano?.entrar?.dica ?? ''}`, comando: login.comando, sessao: login.sessao, token, esc });
+    }
+    toast('Conta adicionada ao rodízio.');
+  },
+  skill: async (f) => {
+    const dados = ler(f);
+    const corpo = { nome: dados.nome, descricao: dados.descricao, conteudo: dados.conteudo, todas: !!dados.todas, equipes: new FormData(f).getAll('equipes') };
+    const k = f.dataset.id ? await api('PUT', `/api/skills/${encodeURIComponent(f.dataset.id)}`, corpo) : await api('POST', '/api/skills', corpo);
+    toast(`Skill ${k.nome} salva. As equipes já herdam na próxima tarefa.`);
+    location.hash = `#/skills/${encodeURIComponent(k.id)}`;
+    if (telaSkills.editando === k.id) telaSkills.carregar();
+  },
+  'proposta-equipe': async (f) => {
+    const { dados, proposta } = S.analiseEquipe ?? {};
+    if (!proposta) return;
+    const editado = ler(f);
+    const e = await api('POST', '/api/equipes', {
+      ...dados,
+      nome: editado.nome || proposta.nome,
+      desc: proposta.desc,
+      familia: proposta.familia,
+      foco: proposta.foco,
+      contextos: proposta.contextos.join(', '),
+      caminho: editado.caminho,
+      instrucoes: editado.instrucoes,
+      requer: dados.requer || (proposta.requerEditar ? 'editar' : ''),
+      aprovacao: !!dados.aprovacao,
+      treinoRecomendado: proposta.treino,
+    });
+    upsert(S.d.equipes, e);
+    S.analiseEquipe = null;
+    $('[data-form="equipe"]')?.reset();
+    desenharAnalise();
+    if (S.treinarAoCriar) {
+      S.treinarAoCriar = false;
       location.hash = `#/treinar/${e.id}`;
       return;
     }
-    toast('Equipe criada. O gestor já pode usá-la.');
+    toast(`Equipe ${e.nome} criada com o prompt de base. O gestor já pode usá-la.`);
   },
   treinar: (f) => treinoTelas.enviarTreinar(f),
   ia: async (f) => {
@@ -1878,7 +2584,8 @@ const formularios = {
   },
   'editar-ia': async (f) => {
     const dados = ler(f);
-    await api('PATCH', `/api/ias/${f.dataset.id}`, { ...dados, capacidades: { arquivos: !!dados.arquivos, editar: !!dados.editar } });
+    const niveis = 'nivel-padrao' in dados ? { rapido: dados['nivel-rapido'], padrao: dados['nivel-padrao'], forte: dados['nivel-forte'] } : undefined;
+    await api('PATCH', `/api/ias/${f.dataset.id}`, { ...dados, niveis, capacidades: { arquivos: !!dados.arquivos, editar: !!dados.editar } });
     document.activeElement?.blur();
     S.abertos.delete(`ia-${f.dataset.id}`);
     telaIAs.atualizar(true);
@@ -1925,6 +2632,10 @@ document.addEventListener('change', async (ev) => {
     el.value = '';
     if (!confirm(`Instalar ${nome} em ${m.nome}? A instalação roda num terminal aqui dentro; se pedir senha, digite nele.`)) return;
     return terminalMaquina(`/api/maquinas/${m.id}/instalar/${tipoIA}`, `Instalando ${nome} em ${m.nome}`, 'Depois de instalar, entre na conta abrindo o terminal da máquina e rodando a IA uma vez.');
+  }
+  if (tipo === 'niveis-auto') {
+    S.d.niveisModelo = { automatico: el.checked };
+    return api('PUT', '/api/ajustes/niveis', { automatico: el.checked }).then(() => toast(el.checked ? 'O modelo agora segue a dificuldade de cada etapa.' : 'Cada IA usa o modelo dela em tudo.')).catch(() => {});
   }
   if (tipo === 'hr-usar') return api('PATCH', '/api/headroom', { usar: el.checked }).catch(() => {});
   if (tipo === 'hr-porta') return api('PATCH', '/api/headroom', { porta: Number(el.value) }).catch(() => {});
@@ -1984,8 +2695,9 @@ window.addEventListener('scroll', esconderDica, true);
 // Colar print direto no pedido.
 document.addEventListener('paste', async (ev) => {
   if (ev.target.id !== 'pedido') return;
-  const imagens = [...(ev.clipboardData?.files ?? [])].filter((f) => f.type.startsWith('image/'));
+  const imagens = [...(ev.clipboardData?.files ?? [])];
   if (!imagens.length) return;
+  ev.preventDefault();
   S.fotos.push(...(await lerFotos(imagens)));
   telaInicio.fotos();
 });
@@ -2009,6 +2721,24 @@ document.addEventListener('dragover', (ev) => {
 document.addEventListener('dragend', () => {
   arrastando = null;
   document.querySelectorAll('.fila li').forEach((x) => x.classList.remove('alvo', 'arrastando'));
+});
+// Arquivo solto fora do pedido não pode abrir no lugar do app.
+window.addEventListener('dragover', (ev) => ev.dataTransfer?.types?.includes('Files') && ev.preventDefault());
+window.addEventListener('drop', (ev) => ev.dataTransfer?.files?.length && !ev.target.closest?.('[data-form="tarefa"]') && ev.preventDefault());
+// Arrastar arquivos do computador para o pedido.
+document.addEventListener('dragover', (ev) => {
+  if (!ev.target.closest?.('[data-form="tarefa"]') || !ev.dataTransfer?.types?.includes('Files')) return;
+  ev.preventDefault();
+  ev.target.closest('[data-form="tarefa"]').classList.add('soltando');
+});
+document.addEventListener('dragleave', (ev) => ev.target.closest?.('[data-form="tarefa"]')?.classList.remove('soltando'));
+document.addEventListener('drop', async (ev) => {
+  const form = ev.target.closest?.('[data-form="tarefa"]');
+  if (!form || !ev.dataTransfer?.files?.length) return;
+  ev.preventDefault();
+  form.classList.remove('soltando');
+  S.fotos.push(...(await lerFotos(ev.dataTransfer.files)));
+  telaInicio.fotos();
 });
 document.addEventListener('drop', (ev) => {
   const li = ev.target.closest('[data-arrastar]');

@@ -9,8 +9,11 @@ const net = require('node:net');
 const path = require('node:path');
 
 const RAIZ = path.join(__dirname, '..');
+// O nome interno continua o mesmo: é ele que define a pasta de dados (mudar perderia projetos e ajustes).
 const NOME = 'Singularize Orquestrador';
 app.setName(NOME);
+// O nome que aparece na janela e nos avisos.
+const TITULO = 'Singularize';
 if (process.platform === 'win32') app.setAppUserModelId('com.singularize.orquestrador');
 
 if (!app.requestSingleInstanceLock()) {
@@ -104,7 +107,7 @@ const iniciarServidor = async () => {
     dialog
       .showMessageBox({
         type: 'error',
-        title: NOME,
+        title: TITULO,
         message: 'O motor do app parou inesperadamente.',
         detail: `Código ${codigo}. O registro está em:\n${arquivoLog()}`,
         buttons: ['Reiniciar o app', 'Fechar'],
@@ -121,7 +124,7 @@ const iniciarServidor = async () => {
 };
 
 const telaAbertura = `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><html><body style="margin:0;background:#000;color:#eaeaf0;font-family:Georgia,serif;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:14px">
-<div style="font-size:30px">Singularize <span style="color:#8f8f99">Orquestrador</span></div>
+<div style="font-size:30px">Singularize</div>
 <div style="font:14px system-ui,sans-serif;color:#8f8f99">Preparando suas equipes…</div>
 <div style="width:160px;height:2px;background:#26262d;overflow:hidden;border-radius:2px"><div style="width:40%;height:2px;background:#9d7bff;animation:a 1.1s ease-in-out infinite"></div></div>
 <style>@keyframes a{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}</style></body></html>`)}`;
@@ -133,13 +136,25 @@ const criarJanela = () => {
     minWidth: 980,
     minHeight: 640,
     backgroundColor: '#000000',
-    title: NOME,
+    title: TITULO,
     icon: icone(),
     autoHideMenuBar: true,
     show: false,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false, preload: path.join(__dirname, 'preload.cjs') },
   });
   janela.once('ready-to-show', () => janela.show());
+  // Sem menu, o F11 do Windows não faz nada sozinho: tela cheia liga e desliga aqui. Esc também sai.
+  janela.webContents.on('before-input-event', (ev, input) => {
+    if (input.type !== 'keyDown') return;
+    if (input.key === 'F11') {
+      ev.preventDefault();
+      janela.setFullScreen(!janela.isFullScreen());
+    } else if (input.key === 'Escape' && janela.isFullScreen()) {
+      janela.setFullScreen(false);
+    } else if (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i')) {
+      janela.webContents.toggleDevTools();
+    }
+  });
   // A tela de abertura é trocada pela interface assim que o servidor sobe; o cancelamento dela é esperado.
   janela.__abertura = janela.loadURL(telaAbertura).catch(() => {});
 
@@ -167,8 +182,8 @@ const criarJanela = () => {
       const partes = [ocupado.agentes ? `${ocupado.agentes} agente(s) com terminal aberto` : '', ocupado.tarefas ? `${ocupado.tarefas} tarefa(s) em execução` : ''].filter(Boolean);
       const { response } = await dialog.showMessageBox(janela, {
         type: 'question',
-        title: NOME,
-        message: 'Fechar o Singularize Orquestrador?',
+        title: TITULO,
+        message: 'Fechar o Singularize?',
         detail: `Há ${partes.join(' e ')}. Os terminais serão encerrados; as tarefas continuam de onde pararam na próxima vez que você abrir o app.`,
         buttons: ['Fechar mesmo assim', 'Continuar usando'],
         defaultId: 1,
@@ -196,6 +211,7 @@ const encerrar = async () => {
 // Seletor de pastas nativo, só para a própria interface do app.
 // Mostra um arquivo (ex.: o diagnóstico) selecionado no Explorer / gerenciador de arquivos.
 ipcMain.handle('mostrar-arquivo', (evento, caminho) => {
+  if (!endereco || !evento.senderFrame?.url?.startsWith(endereco)) return;
   if (typeof caminho === 'string' && fs.existsSync(caminho)) shell.showItemInFolder(caminho);
 });
 
@@ -230,7 +246,7 @@ app.whenReady().then(async () => {
       if (e.code !== 'ERR_ABORTED' && e.errno !== -3) throw e;
     });
   } catch (e) {
-    await dialog.showMessageBox({ type: 'error', title: NOME, message: 'Não foi possível abrir o app.', detail: `${e.message}\n\nRegistro: ${arquivoLog()}` });
+    await dialog.showMessageBox({ type: 'error', title: TITULO, message: 'Não foi possível abrir o app.', detail: `${e.message}\n\nRegistro: ${arquivoLog()}` });
     saindo = true;
     servidor?.kill();
     app.exit(1);

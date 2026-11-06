@@ -65,12 +65,14 @@ export const registrarRotasAgentes = ({ app, rota, erro, campo, cfg, store, bus,
     rota(async (req) => {
       const ws = campo(req.params.ws, 120);
       const existentes = new Set((await store.listar('agentes')).map((a) => a.id));
-      const doc = sanitizarCanvas(ws, req.body ?? {}, existentes);
+      const corpo = req.body ?? {};
       const antes = await obterCanvas(ws);
       // Agente só sai da tela pelo DELETE do agente. Um save atrasado do navegador não pode apagar
-      // um agente que acabou de ser criado no servidor.
-      for (const n of antes.nos) if (n.tipo === 'agente' && existentes.has(n.agenteId) && !doc.nos.some((x) => x.agenteId === n.agenteId)) doc.nos.push(n);
-      return salvarCanvas(doc, campo(req.body?.autor, 60));
+      // um agente que acabou de ser criado no servidor (nem os fios ligados a ele).
+      const nosCorpo = Array.isArray(corpo.nos) ? corpo.nos : [];
+      const faltando = antes.nos.filter((n) => n.tipo === 'agente' && existentes.has(n.agenteId) && !nosCorpo.some((x) => x?.agenteId === n.agenteId));
+      const doc = sanitizarCanvas(ws, { ...corpo, nos: [...nosCorpo, ...faltando] }, existentes);
+      return salvarCanvas(doc, campo(corpo.autor, 60));
     }),
   );
 
@@ -163,7 +165,19 @@ export const registrarRotasAgentes = ({ app, rota, erro, campo, cfg, store, bus,
 
   // ------------------------------------------------------------ cérebro (vault)
 
-  app.get('/api/cerebro', rota((req) => ({ itens: cerebro.buscar(campo(req.query.q, 200), Number(req.query.limite) || 15) })));
+  // Busca e leitura feitas pelos agentes acendem as notas na tela do Cérebro (a própria tela lê com ?tela=1).
+  const usou = (req, notas, como) => {
+    if (req.query.tela || !notas.length) return;
+    bus.emitir({ tipo: 'cerebro.uso', notas, como, agente: campo(req.get?.('x-orq-agente') ?? req.query.agente, 80) || null, em: new Date().toISOString() });
+  };
+  app.get(
+    '/api/cerebro',
+    rota((req) => {
+      const itens = cerebro.buscar(campo(req.query.q, 200), Number(req.query.limite) || 15);
+      usou(req, itens.slice(0, 6).map((i) => i.caminho).filter(Boolean), 'busca');
+      return { itens };
+    }),
+  );
   app.get('/api/cerebro/areas', rota(() => ({ areas: cerebro.areas() })));
   app.get('/api/cerebro/grafo', rota(async () => cerebro.grafo({ equipes: await store.listar('equipes'), tarefas: await store.listar('tarefas') })));
   app.get(
@@ -171,6 +185,7 @@ export const registrarRotasAgentes = ({ app, rota, erro, campo, cfg, store, bus,
     rota((req) => {
       const nota = cerebro.ler(campo(req.query.caminho, 400));
       if (!nota) throw erro(404, 'Nota não encontrada no cérebro. Procure com: orq cerebro <termo>');
+      usou(req, [nota.caminho].filter(Boolean), 'leitura');
       return nota;
     }),
   );

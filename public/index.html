@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#000000">
-<title>Singularize Orquestrador</title>
+<title>Singularize</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=JetBrains+Mono:wght@400&display=swap">
@@ -14,13 +14,14 @@
 </head>
 <body>
 <header class="topo">
-  <a class="marca" href="#/">Singularize <span>Orquestrador</span></a>
+  <a class="marca" href="#/">Singularize</a>
   <nav class="secoes" aria-label="Seções">
     <a href="#/" data-rota="inicio">Solicitações</a>
     <a href="#/livre" data-rota="livre">Tela livre</a>
     <a href="#/cerebro" data-rota="cerebro">Cérebro</a>
     <a href="#/equipes" data-rota="equipes">Equipes</a>
-    <a href="#/terminais" data-rota="terminais">Acompanhar equipes</a>
+    <a href="#/terminais" data-rota="terminais" data-dica="Terminais de cada equipe, ao vivo.">Acompanhar</a>
+    <a href="#/comunicacao" data-rota="comunicacao">Comunicação</a>
     <a href="#/ias" data-rota="ias">IAs</a>
     <a href="#/maquinas" data-rota="maquinas">Máquinas</a>
     <a href="#/ajuda" data-rota="ajuda">Ajuda</a>
@@ -33,6 +34,7 @@
 <div id="r-aviso"></div>
 <div id="app"></div>
 <div id="r-resumo"></div>
+<aside id="r-treinos-vivo" class="tv" aria-live="polite" aria-label="Treinos em andamento" hidden></aside>
 <div id="r-toast" role="status" aria-live="polite"></div>
 <script src="/app.js" type="module"></script>
 </body>

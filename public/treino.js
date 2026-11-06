@@ -4,19 +4,25 @@ const ESTADOS = {
   'gerando-casos': ['acento', 'criando casos de teste'],
   revisar: ['espera', 'revise os casos'],
   treinando: ['acento', 'treinando'],
+  'provando-ias': ['acento', 'prova das IAs'],
   concluido: ['ok', 'concluído'],
   falhou: ['erro', 'parou com erro'],
   cancelado: ['erro', 'cancelado'],
   interrompido: ['espera', 'interrompido'],
+  pausado: ['espera', 'sem cota: continua sozinho'],
 };
 
 // Altura da caixa de texto para caber o texto todo (sem rolagem dentro da caixa).
 const linhas = (texto, porLinha) => Math.max(1, Math.ceil(String(texto ?? '').length / porLinha));
 
-const estimar = ({ copias, rodadas, casos }) => {
-  const chamadas = 1 + rodadas * (copias * casos + copias + 1);
-  return { chamadas, minutos: Math.max(1, Math.round((chamadas * 25) / 60)) };
+const estimar = ({ copias, rodadas, casos, confirmacoes = 1 }) => {
+  // + a prova da IA reserva no fim (casos + 1 nota) + as confirmações da nota vencedora.
+  const chamadas = 1 + rodadas * (copias * casos + copias + 1) + casos + 1 + confirmacoes * (casos + 1);
+  return { chamadas, minutos: Math.max(1, Math.round((chamadas * 25) / 60)), tokensMil: Math.round((chamadas * 4000) / 1000) };
 };
+
+const OBJETIVO_PROFESSOR =
+  'Ensinar equipes de IA como um bom professor: criar casos de teste realistas, variados e difíceis na medida certa, com critérios objetivos; dar notas justas e coerentes dizendo o que faltou; e reescrever instruções que corrigem a causa das falhas.';
 
 export const criarTelasTreino = ({ S, $, esc, api, toast, ajuda }) => {
   const equipe = (id) => S.d.equipes.find((e) => e.id === id);
@@ -36,17 +42,25 @@ export const criarTelasTreino = ({ S, $, esc, api, toast, ajuda }) => {
       this.nivel = 'medio';
       this.custom = { ...S.d.niveisTreino.medio };
       const treinador = equipe('treinador');
-      const ligadas = iasLigadas();
+      const professor = e.id === 'treinador';
+      // No treino do Treinador, quem prepara a prova e corrige é outra IA (a do Avaliador, de preferência).
+      const ligadas = professor ? iasLigadas().filter((i) => i.id !== e.principal) : iasLigadas();
+      const preferida = professor ? equipe('avaliador')?.principal : treinador?.principal;
       $('#app').innerHTML = `<div class="pagina treino">
         <a href="#/equipes" class="link" style="align-self:flex-start">← Equipes</a>
         <div class="empilha" style="gap:8px">
           <span class="dica">${e.familia ? `Família ${esc(e.familia)}` : 'Equipe'} · responde com ${esc(iaNome(e.principal))}</span>
           <h1 class="titulo" style="font-size:44px">Treinar ${esc(e.nome)}</h1>
-          <p class="intro">O Treinador cria casos de teste para o foco que você der. Depois, cópias desta equipe com instruções diferentes respondem a esses casos, recebem nota, e a melhor vira base da rodada seguinte. Quando uma cópia atinge a meta, ela vira a versão oficial da equipe.</p>
+          <p class="intro">${
+            professor
+              ? 'Aqui o Treinador vira aluno, como um professor sendo formado para ensinar. Outra IA prepara uma prova com tarefas de ensino (criar casos de teste, dar notas a respostas, corrigir instruções que falharam). Cópias do Treinador fazem a prova, e o método vencedor passa a guiar todos os próximos treinos de equipes.'
+              : 'O Treinador cria casos de teste para o foco que você der. Depois, cópias desta equipe com instruções diferentes respondem a esses casos, recebem nota, e a melhor vira base da rodada seguinte. Quando uma cópia atinge a meta, ela vira a versão oficial da equipe.'
+          }</p>
+          <p class="dica" style="font-size:14px;line-height:1.5;margin:0">No fim, as IAs da equipe fazem a mesma prova: a principal precisa da meta e a reserva da nota mínima dela. Se a reserva for melhor que a principal, ela é promovida e a principal vira reserva. Se a reserva não passar, outras IAs ligadas tentam a vaga.</p>
         </div>
         <form class="empilha" style="gap:22px" data-form="treinar">
           <div class="grupo"><label for="tr-obj">Em que esta equipe deve ficar excelente? ${ajuda('Seja específico: o tipo de assunto, de pedido e de resposta. Ex.: "segurança de eventos noturnos: controle de acesso, lotação, brigada, plano de evacuação" ou "pesquisa política no Brasil com fontes oficiais".')}</label>
-            <textarea class="campo" id="tr-obj" name="objetivo" rows="3" required placeholder="Ex.: segurança de aplicações web: OWASP Top 10, autenticação, APIs e segredos">${esc(e.foco || e.desc || '')}</textarea></div>
+            <textarea class="campo" id="tr-obj" name="objetivo" rows="3" required placeholder="Ex.: segurança de aplicações web: OWASP Top 10, autenticação, APIs e segredos">${esc(professor ? OBJETIVO_PROFESSOR : e.foco || e.desc || '')}</textarea></div>
 
           <fieldset class="tr-niveis" style="border:none;margin:0;padding:0">
             <legend class="rotulo" style="margin-bottom:12px;color:var(--texto)">Nível do treino ${ajuda('Quanto mais cópias, rodadas e casos, melhor tende a ficar, e mais da sua cota gasta. As chamadas são o máximo: o treino para antes se atingir a meta.')}</legend>
@@ -55,22 +69,34 @@ export const criarTelasTreino = ({ S, $, esc, api, toast, ajuda }) => {
           </fieldset>
 
           <div class="tr-linha">
-            <div class="grupo" style="flex:1 1 260px"><label for="tr-meta">Meta: nota mínima para a cópia virar a equipe oficial</label>
-              <div style="display:flex;align-items:center;gap:14px"><input type="range" id="tr-meta" name="meta" min="50" max="100" step="5" value="85" style="flex:1"><span class="serif" style="font-size:28px" id="tr-meta-v">85</span></div></div>
-            <div class="grupo" style="flex:1 1 260px"><label for="tr-ia">IA do Treinador ${ajuda('Ela cria os casos, escreve as cópias e dá as notas. Use a mais forte que você tem (ex.: Claude).')}</label>
-              <select class="campo" id="tr-ia" name="treinadorIA">${ligadas.map((i) => `<option value="${esc(i.id)}" ${i.id === treinador?.principal ? 'selected' : ''}>${esc(i.nome)}${i.problema ? ' (com problema)' : ''}</option>`).join('')}</select></div>
+            <div class="grupo" style="flex:1 1 220px"><label for="tr-meta">Meta da IA principal ${ajuda('Nota mínima para a cópia virar a equipe oficial e para a IA principal continuar no posto.')}</label>
+              <div style="display:flex;align-items:center;gap:14px"><input type="range" id="tr-meta" name="meta" min="50" max="100" step="5" value="80" style="flex:1"><span class="serif" style="font-size:28px" id="tr-meta-v">80</span></div></div>
+            <div class="grupo" style="flex:1 1 220px"><label for="tr-meta-r">Nota mínima da reserva ${ajuda('A IA reserva faz a mesma prova no fim. Abaixo disso, outras IAs ligadas tentam a vaga.')}</label>
+              <div style="display:flex;align-items:center;gap:14px"><input type="range" id="tr-meta-r" name="metaReserva" min="40" max="100" step="5" value="70" style="flex:1"><span class="serif" style="font-size:28px" id="tr-meta-r-v">70</span></div></div>
+            <div class="grupo" style="flex:1 1 220px"><label for="tr-ia">${professor ? 'IA que prepara a prova e corrige' : 'IA do Treinador'} ${ajuda(professor ? 'Precisa ser outra IA, diferente da que o Treinador usa, para ninguém dar nota a si mesmo.' : 'Ela cria os casos, escreve as cópias e dá as notas. Use a mais forte que você tem (ex.: Claude).')}</label>
+              <select class="campo" id="tr-ia" name="treinadorIA">${ligadas.map((i) => `<option value="${esc(i.id)}" ${i.id === preferida ? 'selected' : ''}>${esc(i.nome)}${i.problema ? ' (com problema)' : ''}</option>`).join('')}</select>
+              ${professor && !ligadas.length ? '<span class="dica">Só há uma IA ligada: ela vai corrigir a si mesma. Ligue outra em IAs para uma nota justa.</span>' : ''}</div>
           </div>
+          <fieldset class="tr-linha" style="border:none;margin:0;padding:0">
+            <legend class="rotulo" style="margin-bottom:12px;color:var(--texto)">Limites do treino ${ajuda('O treino respeita estes limites. Perto do fim do tempo ou do orçamento, ele não começa outra rodada: guarda a melhor versão e documenta no cérebro. Se o orçamento de tokens acabar, aplica o melhor que conseguiu (se for melhor que a versão atual da equipe).')}</legend>
+            <div class="grupo" style="flex:1 1 180px"><label for="tr-lim-min">Tempo máximo (min) ${ajuda('0 = sem limite de tempo.')}</label><input class="campo" type="number" id="tr-lim-min" name="limiteMin" min="0" max="600" value="60"></div>
+            <div class="grupo" style="flex:1 1 180px"><label for="tr-lim-tok">Orçamento (mil tokens) ${ajuda('Teto de tokens estimados do treino inteiro. Sugerido: 1,5× o previsto para o nível.')}</label><input class="campo" type="number" id="tr-lim-tok" name="limiteTokensMil" min="0" max="100000" value="0"></div>
+            <div class="grupo" style="flex:1 1 180px"><label for="tr-conf">Confirmações da nota ${ajuda('A meta não vale por um pico isolado: a cópia vencedora responde aos casos de novo esse número de vezes e precisa ficar na meta em todas.')}</label><input class="campo" type="number" id="tr-conf" name="confirmacoes" min="0" max="3" value="1"></div>
+          </fieldset>
           <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
             <span class="dica" id="tr-resumo"></span>
             <div class="cresce"></div>
             <a class="btn texto" href="#/equipes">Cancelar</a>
-            <button class="btn" type="submit" ${ligadas.length ? '' : 'disabled'}>Criar casos de teste</button>
+            <button class="btn" type="submit" ${ligadas.length || professor ? '' : 'disabled'}>${professor ? 'Preparar a prova' : 'Criar casos de teste'}</button>
           </div>
-          ${ligadas.length ? '' : '<p class="dica erro">Nenhuma IA ligada. Ligue uma em IAs.</p>'}
+          ${ligadas.length || professor ? '' : '<p class="dica erro">Nenhuma IA ligada. Ligue uma em IAs.</p>'}
         </form>
       </div>`;
       this.render();
       $('#tr-meta').addEventListener('input', (ev) => ($('#tr-meta-v').textContent = ev.target.value));
+      $('#tr-meta-r').addEventListener('input', (ev) => ($('#tr-meta-r-v').textContent = ev.target.value));
+      for (const id of ['#tr-lim-min', '#tr-lim-tok']) $(id).addEventListener('input', (ev) => (ev.target.dataset.mexido = '1'));
+      $('#tr-conf').addEventListener('input', () => this.resumo());
       $('#app').addEventListener('input', this.aoDigitar);
     },
     aoDigitar(ev) {
@@ -83,10 +109,16 @@ export const criarTelasTreino = ({ S, $, esc, api, toast, ajuda }) => {
       return this.nivel === 'personalizado' ? this.custom : S.d.niveisTreino[this.nivel];
     },
     resumo() {
-      const v = this.valores();
+      const conf = Number($('#tr-conf')?.value ?? 1);
+      const v = { ...this.valores(), confirmacoes: conf };
       const est = estimar(v);
+      // Ao trocar de nível, os limites sugeridos acompanham (até você mexer neles).
+      const lim = $('#tr-lim-min');
+      if (lim && !lim.dataset.mexido) lim.value = this.valores().limiteMin ?? Math.max(20, Math.round(est.minutos * 1.5));
+      const tok = $('#tr-lim-tok');
+      if (tok && !tok.dataset.mexido) tok.value = Math.round(est.tokensMil * 1.5);
       const el = $('#tr-resumo');
-      if (el) el.innerHTML = `Este treino: até <b>${est.chamadas} chamadas</b> à IA, cerca de <b>${est.minutos} min</b>. Para antes se atingir a meta.`;
+      if (el) el.innerHTML = `Este treino: até <b>${est.chamadas} chamadas</b> à IA (~${est.tokensMil} mil tokens), cerca de <b>${est.minutos} min</b>. Para antes se atingir a meta de forma estável.`;
       const c = $('#tr-custom-est');
       if (c) c.textContent = `≈ ${est.chamadas} chamadas · ~${est.minutos} min`;
     },
@@ -149,7 +181,7 @@ export const criarTelasTreino = ({ S, $, esc, api, toast, ajuda }) => {
       caixa.innerHTML = `<div class="pagina treino">
         <a href="#/equipes" class="link" style="align-self:flex-start">← Equipes</a>
         <div class="empilha" style="gap:8px">
-          <span class="dica">${esc(t.id)} · ${t.copias} cópias · até ${t.rodadas} rodadas · meta ${t.meta}/100 · treinador ${esc(iaNome(t.treinadorIA))} · ${t.chamadas ?? 0} chamadas feitas</span>
+          <span class="dica">${esc(t.id)} · ${t.copias} cópias · até ${t.rodadas} rodadas · meta ${t.meta}/100 (reserva ${t.metaReserva ?? 70}) · ${t.professor ? 'prova e notas' : 'treinador'}: ${esc(iaNome(t.treinadorIA))} · ${t.chamadas ?? 0} chamadas feitas · ~${Math.round((t.tokens ?? 0) / 1000)}${t.limiteTokensMil ? ` de ${t.limiteTokensMil}` : ''} mil tokens${t.limiteMin ? ` · limite ${t.limiteMin} min` : ''} · nota confirmada ${t.confirmacoes ?? 0}× · <a href="#/comunicacao/${esc(t.id)}">Ver comunicação</a></span>
           <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap"><h1 class="titulo" style="font-size:40px">Treino de ${esc(e?.nome ?? t.equipeNome)}</h1><span class="selo ${cor}">${rotulo}</span></div>
           <p class="intro" style="margin:0">${esc(t.objetivo)}</p>
         </div>
@@ -161,12 +193,17 @@ export const criarTelasTreino = ({ S, $, esc, api, toast, ajuda }) => {
 
     corpo(t, est) {
       if (t.estado === 'gerando-casos') return `<p class="aviso">O Treinador está criando ${t.casos} casos de teste para este foco. Leva um ou dois minutos.</p><button type="button" class="btn texto" data-acao="tr-cancelar" data-id="${t.id}" style="align-self:flex-start">Cancelar</button>`;
-      if (['revisar', 'falhou', 'cancelado', 'interrompido'].includes(t.estado) && !t.historico?.length) return this.revisar(t, est);
+      if (['revisar', 'falhou', 'cancelado', 'interrompido', 'pausado'].includes(t.estado) && !t.historico?.length) return this.revisar(t, est);
       return this.progresso(t);
     },
 
     revisar(t, est) {
-      const erro = t.estado === 'falhou' ? `<p class="aviso erro">Parou: ${esc(t.erro ?? '')}</p>` : '';
+      const erro =
+        t.estado === 'falhou'
+          ? `<p class="aviso erro">Parou: ${esc(t.erro ?? '')}</p>`
+          : t.estado === 'pausado'
+            ? `<p class="aviso">Todas as IAs ficaram sem cota. O treino continua sozinho às ${t.retomarEm ? new Date(t.retomarEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}.</p>`
+            : '';
       return `${erro}
         <div class="empilha" style="gap:6px"><h2 class="titulo" style="font-size:28px">Casos de teste</h2>
         <p class="dica" style="font-size:14px">É assim que o treino mede se a equipe ficou boa. Ajuste o que quiser: cada caso é um pedido e, embaixo, um critério por linha do que uma resposta boa precisa ter.</p></div>
@@ -202,7 +239,7 @@ export const criarTelasTreino = ({ S, $, esc, api, toast, ajuda }) => {
               const vencedora = melhor?.id === c.id;
               return `<details class="tr-copia ${vencedora ? 'vencedora' : ''}" data-chave="${esc(c.id)}">
                 <summary><span style="flex:1 1 auto"><b>${esc(c.id)}</b> · ${esc(c.nome)}${vencedora ? ' <span class="selo ok">melhor</span>' : ''}</span>
-                <span class="serif" style="font-size:22px">${c.media ?? (c.progresso ? `<span class="dica">respondendo ${esc(c.progresso)}</span>` : '<span class="dica">na fila</span>')}</span></summary>
+                <span class="serif" style="font-size:22px">${c.media ?? (c.progresso ? `<span class="dica">respondendo ${esc(c.progresso)}</span>` : '<span class="dica">na fila</span>')}${c.confirmacoes?.length ? `<span class="dica" style="font-size:12px;margin-left:8px" data-dica="Notas quando respondeu de novo para confirmar.">${c.estavel ? 'confirmada' : 'instável'}: ${c.confirmacoes.join(', ')}</span>` : ''}</span></summary>
                 ${barra(c.media)}
                 <pre class="nota" style="white-space:pre-wrap;font-size:12px;margin:8px 0 0">${esc(c.instrucoes)}</pre>
                 ${(c.notas ?? []).map((n) => `<p class="dica" style="margin:6px 0 0"><b>Caso ${n.caso}: ${n.nota}</b>${n.falta ? ` · faltou: ${esc(n.falta)}` : ''}</p>`).join('')}
@@ -213,18 +250,33 @@ export const criarTelasTreino = ({ S, $, esc, api, toast, ajuda }) => {
         )
         .join('');
       let topo = '';
-      if (t.estado === 'treinando') topo = `<div class="aviso" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">Rodada ${t.rodadaAtual ?? 1} de ${t.rodadas}${melhor ? ` · melhor até agora: ${melhor.media}/100` : ''}<div class="cresce"></div><button type="button" class="btn texto pequeno" data-acao="tr-cancelar" data-id="${t.id}">Cancelar</button></div>`;
+      if (t.estado === 'provando-ias') topo = `<div class="aviso">Prova das IAs: a reserva (e, se precisar, outras IAs) responde aos casos com as instruções vencedoras.</div>`;
+      else if (t.estado === 'treinando') topo = `<div class="aviso" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">Rodada ${t.rodadaAtual ?? 1} de ${t.rodadas}${melhor ? ` · melhor até agora: ${melhor.media}/100` : ''}<div class="cresce"></div><button type="button" class="btn texto pequeno" data-acao="tr-cancelar" data-id="${t.id}">Cancelar</button></div>`;
       else if (t.estado === 'concluido')
         topo = `<div class="tr-resultado ${t.atingiu ? 'ok' : ''}">
-          <div class="empilha" style="gap:4px"><span class="rotulo">${t.atingiu ? 'Meta atingida' : 'Meta não atingida'}</span><span class="serif" style="font-size:48px;line-height:1">${melhor?.media ?? '-'}<span class="dica" style="font-size:18px">/100 · meta ${t.meta}</span></span>
+          <div class="empilha" style="gap:4px"><span class="rotulo">${t.atingiu ? 'Meta atingida de forma estável' : t.parada ? `Parou por ${t.parada === 'tempo' ? 'limite de tempo' : 'orçamento de tokens'}` : melhor?.media >= t.meta ? 'Meta atingida só como pico (instável)' : 'Meta não atingida'}</span><span class="serif" style="font-size:48px;line-height:1">${melhor?.media ?? '-'}<span class="dica" style="font-size:18px">/100 · meta ${t.meta}</span></span>
           <span class="dica">${t.aplicado ? `Aplicada à equipe ${esc(t.equipeNome)}. As próximas tarefas já usam estas instruções.` : 'Ainda não aplicada à equipe.'}</span></div>
           <div class="cresce"></div>
           ${t.aplicado ? `<button type="button" class="btn texto" data-acao="tr-desfazer" data-equipe="${t.equipeId}">Desfazer (voltar à versão anterior)</button>` : `<button type="button" class="btn" data-acao="tr-aplicar" data-id="${t.id}">Aplicar à equipe mesmo assim</button>`}
           <a class="btn contorno" href="#/treinar/${esc(t.equipeId)}">Treinar de novo</a>
         </div>`;
-      else if (['falhou', 'interrompido', 'cancelado'].includes(t.estado))
-        topo = `<div class="aviso ${t.estado === 'falhou' ? 'erro' : ''}" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">${t.estado === 'falhou' ? `Parou: ${esc(t.erro ?? '')}` : t.estado === 'interrompido' ? 'O app fechou durante o treino.' : 'Cancelado.'}<div class="cresce"></div>${melhor ? `<button type="button" class="btn texto pequeno" data-acao="tr-aplicar" data-id="${t.id}">Aplicar a melhor (${melhor.media})</button>` : ''}<button type="button" class="btn pequeno" data-acao="tr-continuar" data-id="${t.id}">Continuar de onde parou</button></div>`;
-      return `${topo}${rodadas || '<p class="dica">Criando as primeiras cópias…</p>'}`;
+      else if (['falhou', 'interrompido', 'cancelado', 'pausado'].includes(t.estado))
+        topo = `<div class="aviso ${t.estado === 'falhou' ? 'erro' : ''}" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">${t.estado === 'falhou' ? `Parou: ${esc(t.erro ?? '')}` : t.estado === 'interrompido' ? 'O app fechou durante o treino.' : t.estado === 'pausado' ? `Sem cota em todas as IAs. Continua sozinho às ${t.retomarEm ? new Date(t.retomarEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}.` : 'Cancelado.'}<div class="cresce"></div>${melhor ? `<button type="button" class="btn texto pequeno" data-acao="tr-aplicar" data-id="${t.id}">Aplicar a melhor (${melhor.media})</button>` : ''}<button type="button" class="btn pequeno" data-acao="tr-continuar" data-id="${t.id}">Continuar de onde parou</button></div>`;
+      return `${topo}${this.provaIAs(t)}${rodadas || '<p class="dica">Criando as primeiras cópias…</p>'}`;
+    },
+
+    // Nota de cada IA com as instruções vencedoras, e quem ficou de principal e de reserva.
+    provaIAs(t) {
+      const p = t.provaIAs;
+      if (!p?.resultados?.length) return '';
+      const papel = (r) => (r.ia === p.principal ? 'principal' : r.ia === p.reserva ? 'reserva' : 'fora');
+      const exigido = (r) => (papel(r) === 'principal' ? t.meta : t.metaReserva ?? 70);
+      return `<div class="empilha" style="gap:8px"><h2 class="titulo" style="font-size:26px">Prova das IAs</h2>
+        ${p.promovida ? `<p class="aviso">${esc(iaNome(p.promovida))} foi melhor que a principal e ${t.aplicado ? 'foi promovida a IA principal' : 'será promovida quando o treino for aplicado'}.</p>` : ''}
+        <div class="tr-ias">${p.resultados
+          .map((r) => `<div><b style="flex:1">${esc(r.nome)}</b><span class="dica">${r.papel === 'candidata' ? 'tentou a vaga' : `era ${r.papel}`} → <b>${papel(r)}</b></span><span class="serif" style="font-size:22px;color:${r.media >= exigido(r) ? 'var(--ok)' : '#f08a80'}">${r.media}</span><span class="dica">/ ${papel(r) === 'fora' ? '-' : exigido(r)}</span></div>`)
+          .join('')}</div>
+        ${p.reservaOk ? '' : p.resultados.length === 1 ? '<p class="dica">Só há uma IA ligada para esta equipe, então não houve reserva para provar. Ligue outra IA em IAs.</p>' : `<p class="dica">Nenhuma IA chegou a ${t.metaReserva ?? 70} para ser a reserva. Ligue outra IA ou treine de novo.</p>`}</div>`;
     },
 
     log(t) {
@@ -298,6 +350,10 @@ export const criarTelasTreino = ({ S, $, esc, api, toast, ajuda }) => {
       rodadas: v.rodadas,
       casos: v.casos,
       meta: Number(dados.get('meta')),
+      metaReserva: Number(dados.get('metaReserva')),
+      limiteMin: Number(dados.get('limiteMin')),
+      limiteTokensMil: Number(dados.get('limiteTokensMil')),
+      confirmacoes: Number(dados.get('confirmacoes')),
       treinadorIA: dados.get('treinadorIA'),
     });
     if (!S.d.treinos.some((x) => x.id === t.id)) S.d.treinos.push(t);

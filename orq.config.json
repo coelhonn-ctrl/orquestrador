@@ -10,7 +10,6 @@
       "prefere": [
         "claude",
         "antigravity",
-        "gemini",
         "codex",
         "ollama"
       ]
@@ -25,7 +24,6 @@
       "prefere": [
         "ollama",
         "antigravity",
-        "gemini",
         "claude",
         "codex"
       ]
@@ -42,7 +40,6 @@
         "claude",
         "codex",
         "antigravity",
-        "gemini",
         "ollama"
       ]
     }
@@ -57,11 +54,6 @@
       "id": "antigravity",
       "tipo": "antigravity",
       "nome": "Antigravity (Google)"
-    },
-    {
-      "id": "gemini",
-      "tipo": "gemini",
-      "nome": "Gemini CLI"
     },
     {
       "id": "codex",
@@ -117,8 +109,7 @@
           "prefere": [
             "claude",
             "codex",
-            "antigravity",
-            "gemini"
+            "antigravity"
           ],
           "requer": "editar",
           "instrucoes": "",
@@ -133,8 +124,7 @@
           "prefere": [
             "claude",
             "codex",
-            "antigravity",
-            "gemini"
+            "antigravity"
           ],
           "requer": "editar",
           "instrucoes": "",
@@ -149,8 +139,7 @@
           "prefere": [
             "claude",
             "codex",
-            "antigravity",
-            "gemini"
+            "antigravity"
           ],
           "requer": "editar",
           "instrucoes": "",
@@ -172,8 +161,7 @@
           "prefere": [
             "claude",
             "codex",
-            "antigravity",
-            "gemini"
+            "antigravity"
           ],
           "requer": "editar",
           "instrucoes": "",
@@ -194,7 +182,6 @@
           "agentes": "buscador, comparador",
           "prefere": [
             "antigravity",
-            "gemini",
             "claude",
             "codex"
           ],
@@ -217,7 +204,6 @@
           "prefere": [
             "claude",
             "antigravity",
-            "gemini",
             "codex"
           ],
           "instrucoes": "Escreva em português simples, sem enrolação, no formato e no tom que o pedido pede.",
@@ -232,7 +218,6 @@
           "prefere": [
             "claude",
             "antigravity",
-            "gemini",
             "codex"
           ],
           "instrucoes": "",
@@ -254,7 +239,6 @@
           "prefere": [
             "claude",
             "antigravity",
-            "gemini",
             "codex"
           ],
           "requer": "editar",
@@ -277,7 +261,6 @@
           "prefere": [
             "claude",
             "antigravity",
-            "gemini",
             "codex"
           ],
           "instrucoes": "",
@@ -299,7 +282,6 @@
           "prefere": [
             "claude",
             "antigravity",
-            "gemini",
             "codex"
           ],
           "instrucoes": "",
@@ -321,8 +303,7 @@
           "prefere": [
             "claude",
             "codex",
-            "antigravity",
-            "gemini"
+            "antigravity"
           ],
           "requer": "editar",
           "instrucoes": "",

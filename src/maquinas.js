@@ -63,7 +63,7 @@ const rodarSsh = (m, remoto, { entrada = null, timeoutMs = 30_000 } = {}) =>
     else filho.stdin.end();
   });
 
-const COMANDOS = ['claude', 'agy', 'gemini', 'codex', 'ollama', 'node', 'git'];
+const COMANDOS = ['claude', 'agy', 'codex', 'ollama', 'node', 'git'];
 
 const explicarErro = (erro) => {
   if (/Permission denied/i.test(erro)) return 'Acesso negado. Configure o acesso sem senha (botão abaixo) ou confira usuário e chave.';

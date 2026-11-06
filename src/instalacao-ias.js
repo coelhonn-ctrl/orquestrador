@@ -17,13 +17,8 @@ export const PLANOS = {
   claude: {
     descricao: 'Instalador oficial da Anthropic.',
     instalar: WIN ? 'irm https://claude.ai/install.ps1 | iex' : 'curl -fsSL https://claude.ai/install.sh | bash',
-    entrar: { comando: 'claude', args: [], rotulo: 'Entrar na conta', dica: 'Abre o Claude Code. Siga o login na tela. Se ele perguntar se você confia na pasta, escolha "Yes, I trust this folder". Quando aparecer a caixa de digitar, já está logado: digite /exit.' },
-  },
-  gemini: {
-    descricao: 'Pacote oficial @google/gemini-cli pelo npm. Atenção: desde 18/06/2026 só funciona com chave de API paga do Gemini; contas pessoais do Google usam o Antigravity.',
-    instalar: viaNpm('@google/gemini-cli'),
-    exibir: 'npm install -g @google/gemini-cli',
-    entrar: { comando: 'gemini', args: [], rotulo: 'Entrar na conta', dica: 'Abre o Gemini CLI. Escolha "Login with Google" e conclua no navegador; depois digite /quit.' },
+    // "auth login" abre o navegador e termina sozinho quando o login acaba (sem precisar digitar /exit).
+    entrar: { comando: 'claude', args: ['auth', 'login'], rotulo: 'Entrar na conta', dica: 'Abre o navegador para você entrar. Quando o login terminar, o terminal fecha sozinho e o app testa a conta.' },
   },
   antigravity: {
     descricao: 'Instalador oficial do Google (antigravity.google). Fica só no seu usuário.',
@@ -85,7 +80,6 @@ export const planoUnix = (tipo) => {
     `P=$(npm prefix -g); if [ -w "$P" ]; then npm install -g ${pacote}; else npm install -g --prefix "$HOME/.local" ${pacote}; fi`;
   return {
     claude: { instalar: 'curl -fsSL https://claude.ai/install.sh | bash' },
-    gemini: { instalar: npm('@google/gemini-cli'), exibir: 'npm install -g @google/gemini-cli' },
     codex: { instalar: npm('@openai/codex'), exibir: 'npm install -g @openai/codex' },
     antigravity: { instalar: 'curl -fsSL https://antigravity.google/cli/install.sh | bash' },
     agy: { instalar: 'curl -fsSL https://antigravity.google/cli/install.sh | bash' },
